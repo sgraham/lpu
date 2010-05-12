@@ -2,3 +2,6 @@ syntax: glob
 *.6
 6.out
 *.swp
+*exe
+tmp.dot
+tmp.png

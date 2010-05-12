@@ -8,20 +8,17 @@ import "fmt"
     next 7 bits of both are the Type
     last 24 bits are the data, sometimes immediate, else points to another node
 */
-type Pair struct {
-    car uint32
-    cdr uint32
-}
 
 type Type int
 const (
-    t_pointer = iota
+    t_pointer Type = iota
     t_fixnum
     t_symbol
     t_list
     t_variable
     t_procedure
     t_if
+    t_if2
     t_combination
     t_moreArgs
     t_funcall
@@ -30,6 +27,13 @@ const (
     t_cdr
     t_atom
 )
+
+type TypedValue uint32
+
+type Pair struct {
+    car TypedValue
+    cdr TypedValue
+}
 
 // todo; ugly as sin, and no assert? what's the better way?
 func (t Type) String() string {
@@ -41,6 +45,7 @@ func (t Type) String() string {
         case t_variable: return "t_variable"
         case t_procedure: return "t_procedure"
         case t_if: return "t_if"
+        case t_if2: return "t_if2"
         case t_combination: return "t_combination"
         case t_moreArgs: return "t_moreArgs"
         case t_funcall: return "t_funcall"
@@ -49,50 +54,36 @@ func (t Type) String() string {
         case t_cdr: return "t_cdr"
         case t_atom: return "t_atom"
     }
-    return "<unknown>"
+    panic("<unknown>")
 }
 
-func (p *Pair) InUse() bool { return p.car & 0x80000000 != 0 }
-func (p *Pair) SetInUse() () { p.car |= 0x80000000 }
-func (p *Pair) ClrInUse() () { p.car &^= 0x80000000 }
+func (tv TypedValue) GetSpecial() bool { return tv & 0x80000000 != 0 }
+func (tv *TypedValue) SetSpecial(v bool) () { *tv |= 0x80000000 }
+func (tv *TypedValue) ClrSpecial(v bool) () { *tv &^= 0x80000000 }
 
-func (p *Pair) CarBeingTraced() bool { return p.cdr & 0x80000000 != 0 }
-func (p *Pair) SetCarBeingTraced() () { p.cdr |= 0x80000000 }
-func (p *Pair) ClrCarBeingTraced() () { p.cdr &^= 0x80000000 }
+func (p *Pair) Car() TypedValue { return p.car }
+func (p *Pair) Cdr() TypedValue { return p.cdr }
 
-func (p *Pair) CarType() Type { return Type((p.car & 0x7fffffff) >> 24) }
-func (p *Pair) SetCar(t Type, data uint32) { p.car = uint32(t << 24) | data }
-func (p *Pair) SetCarNil() { p.SetCar(t_pointer, 0) }
-
-func (p *Pair) CdrType() Type { return Type((p.cdr & 0x7fffffff) >> 24) }
-func (p *Pair) SetCdr(t Type, data uint32) { p.cdr = uint32(t << 24) | data }
-func (p *Pair) SetCdrNil() { p.SetCdr(t_pointer, 0) }
-
-func (p *Pair) Set(carT Type, carData uint32, cdrT Type, cdrData uint32, inUse bool) {
-    p.SetCar(carT, carData)
-    p.SetCdr(cdrT, cdrData)
-    if inUse {
-        p.SetInUse()
-    } else {
-        p.ClrInUse()
-    }
-}
-
-func (p *Pair) CarData() uint { return uint(p.car & 0xffffff) }
-func (p *Pair) CdrData() uint { return uint(p.cdr & 0xffffff) }
+func (tv TypedValue) Data() uint32 { return uint32(tv & 0xffffff) }
+func (tv TypedValue) Type() Type { return Type(tv & 0xff000000 >> 24) }
 
 func (p Pair) String() string {
+    return fmt.Sprintf("todo;")
+/*
     return fmt.Sprintf("<InUse:%t, GC:%t, A~%s, D~%s, A=%06x (%d), D=%06x (%d)>",
             p.InUse(), p.CarBeingTraced(),
             p.CarType().String()[2:], p.CdrType().String()[2:],
             p.CarData(), p.CarData(),
             p.CdrData(), p.CdrData())
+            */
 }
 
 const maxAddress = 0xffffff
 
 type MachineData struct {
     memory [maxAddress]Pair
+
+    // our registers
     exp Pair
     env Pair
     val Pair
@@ -105,6 +96,7 @@ type MachineData struct {
 func main() {
     md := new(MachineData)
 
+    Cons
     md.memory[0].Set(t_if, 1, t_pointer, 0, true)
 
     md.memory[1].Set(t_fixnum, 100, t_pointer, 2, true)
@@ -112,17 +104,35 @@ func main() {
     md.memory[2].Set(t_fixnum, 200, t_fixnum, 300, true)
 
 
+    // written in this crazy way because we're trying to pretend we're hardware
+    // (no locals, no stack, 5 explicit registers)
+    md.exp = md.memory[0]
+
     for {
-        cur := md.memory[md.pc]
-        switch cur.CarType() {
-            case t_if:
-                fmt.Printf("%06x: in t_if: %v\n", md.pc, cur)
-            default:
-                fmt.Printf("%06x: unknown (%v)\n", md.pc, cur)
-        }
-        md.pc += 1
-        if md.pc > maxAddress {
-            md.pc = 0
-        }
+        State_Eval:
+            switch md.exp.CarType() {
+            case t_fixnum, t_symbol, t_list: goto State_Self
+            //case t_variable: goto State_Lookup
+            //case t_procedure: goto State_Procedure
+            case t_if: goto State_If1
+            //case t_combination: goto State_EvComb
+            }
+
+        State_Self:
+            md.val = md.exp
+            goto State_Return
+
+        State_If1:
+            md.val = md.exp.Cdr()
+            md.clink = Cons(md.env, md.clink)
+            md.clink = TypedCons(t_if2, md.val, md.clink)
+            md.exp = md.exp.Car()
+            goto State_Eval
+
+        State_Return:
+            switch md.clink.CarType() {
+            case t_if2: goto State_If2
+            default: panic("unexpected clink return")
+            }
     }
 }
