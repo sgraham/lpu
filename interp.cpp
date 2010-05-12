@@ -202,8 +202,6 @@ void Mark(U32 root)
     U32 previous = 0;
     for (;;)
     {
-        DumpDot(4);
-
         // follow cars
         while (current != 0 && !IsMarked(current))
         {
@@ -255,9 +253,9 @@ int main()
     p = ConsInit(12, 4);
     p = ConsInit(0, 0);
     
-    DumpDot(4);
-
     Mark(4);
+
+    DumpDot(4);
 
     return 0;
 }
