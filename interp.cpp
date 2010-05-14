@@ -79,9 +79,9 @@ class Type
 typedef __uint32_t U32;
 
 static const int MaxMemSize = 16*1024*1024;
-static U32 sMemory[MaxMemSize];
-static int sAllocPoint = 4;
-static const int StartOfMemory = 4;
+static U32 sMemory[MaxMemSize][2];
+static int sAllocPoint = 2;
+static const int StartOfMemory = 2;
 
 void ResetMachine()
 {
@@ -105,73 +105,73 @@ void ResetMachine()
 U32 Car(U32 cell)
 {
     CHECK_ADDR(cell);
-    return sMemory[cell] & 0xffffff;
+    return sMemory[cell][0] & 0xffffff;
 }
 
 U32 Cdr(U32 cell)
 {
     CHECK_ADDR(cell);
-    return sMemory[cell + 1] & 0xffffff;
+    return sMemory[cell][1] & 0xffffff;
 }
 
 bool IsMarked(U32 cell)
 {
     CHECK_ADDR(cell);
-    return (sMemory[cell] & 0x80000000) != 0;
+    return (sMemory[cell][0] & 0x80000000) != 0;
 }
 
 void SetMark(U32 cell)
 {
     CHECK_ADDR(cell);
-    sMemory[cell] |= 0x80000000;
+    sMemory[cell][0] |= 0x80000000;
 }
 
 void ClearMark(U32 cell)
 {
     CHECK_ADDR(cell);
-    sMemory[cell] &= ~0x80000000;
+    sMemory[cell][0] &= ~0x80000000;
 }
 
 bool IsCdrTraceInProgress(U32 cell)
 {
     CHECK_ADDR(cell);
-    return (sMemory[cell + 1] & 0x80000000) != 0;
+    return (sMemory[cell][1] & 0x80000000) != 0;
 }
 
 void SetCdrTraceInProgress(U32 cell)
 {
     CHECK_ADDR(cell);
-    sMemory[cell + 1] |= 0x80000000;
+    sMemory[cell][1] |= 0x80000000;
 }
 
 void ClearCdrTraceInProgress(U32 cell)
 {
     CHECK_ADDR(cell);
-    sMemory[cell + 1] &= ~0x80000000;
+    sMemory[cell][1] &= ~0x80000000;
 }
 
 void Rplaca(U32 cell, U32 value)
 {
     CHECK_ADDR(cell);
-    sMemory[cell] = value;
+    sMemory[cell][0] = value;
 }
 
 void RplacaAndMark(U32 cell, U32 value)
 {
     CHECK_ADDR(cell);
-    sMemory[cell] = 0x80000000 | value;
+    sMemory[cell][0] = 0x80000000 | value;
 }
 
 void Rplacd(U32 cell, U32 value)
 {
     CHECK_ADDR(cell);
-    sMemory[cell + 1] = value;
+    sMemory[cell][1] = value;
 }
 
 bool IsAtom(U32 cell)
 {
     CHECK_ADDR(cell);
-    return (sMemory[cell] & 0x40000000) != 0;
+    return (sMemory[cell][0] & 0x40000000) != 0;
 }
 
 void DumpDot()
@@ -179,7 +179,7 @@ void DumpDot()
     FILE* f = fopen("tmp.dot", "wt");
     fprintf(f, "digraph nodes {\n");
     fprintf(f, "graph [\nrankdir = \"LR\"\n];\n");
-    for (int i = StartOfMemory; i < sAllocPoint; i += 2)
+    for (int i = StartOfMemory; i < sAllocPoint; ++i)
     {
         fprintf(f,
                 "\"0x%x\" [\n  label = \"<addr> 0x%x (%s%s) | <car> car = ",
@@ -206,7 +206,7 @@ void DumpDot()
 U32 Cons()
 {
     U32 ret = sAllocPoint;
-    sAllocPoint += 2;
+    sAllocPoint += 1;
     return ret;
 }
 
@@ -284,18 +284,18 @@ static void Mark(U32 root)
 static void Sweep()
 {
     U32 low = StartOfMemory;
-    U32 high = sAllocPoint - 2;
+    U32 high = sAllocPoint - 1;
     for (;;)
     {
         while (!IsMarked(high))
         {
             if (high == low) goto donePhase1;
-            high -= 2;
+            high -= 1;
         }
         while (IsMarked(low))
         {
             if (high == low) goto donePhase1;
-            low += 2;
+            low += 1;
         }
         RplacaAndMark(low, Car(high));
         Rplacd(low, Cdr(high));
@@ -304,10 +304,10 @@ static void Sweep()
 donePhase1:
 
     assert(low == high);
-    
-    high += 2;
 
-    for (U32 i = StartOfMemory; i < high; i += 2)
+    high += 1;
+
+    for (U32 i = StartOfMemory; i < high; ++i)
     {
         if (Car(i) >= high)
         {
@@ -340,25 +340,25 @@ static void UnitTests()
         B -> nil,nil
         C -> D,nil
         D -> E,A
-        E -> nil,nill
+        E -> nil,nil
     */
-    ConsInit(6, 8);
+    ConsInit(3, 4);
     ConsInit(0, 0);
-    ConsInit(10, 0);
-    ConsInit(12, 4);
+    ConsInit(5, 0);
+    ConsInit(6, 2);
     ConsInit(0, 0);
-    
+
     GC();
 
-    assert(10 + StartOfMemory == sAllocPoint);
+    assert(5 + StartOfMemory == sAllocPoint);
     //DumpDot();
-    
+
 
     // nuke C->D ptr which chops off D/E
-    Rplaca(8, 0);
+    Rplaca(4, 0);
 
-	GC();
-    assert(6 + StartOfMemory == sAllocPoint);
+    GC();
+    assert(3 + StartOfMemory == sAllocPoint);
     //DumpDot();
 }
 
@@ -369,7 +369,7 @@ int main(int argc, char** argv)
         UnitTests(); // assert on fail
         return 0;
     }
-    
+
     printf("nothing to do.\n");
     return 0;
 }
