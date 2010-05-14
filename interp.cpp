@@ -87,8 +87,8 @@ void ResetMachine()
 {
     memset(sMemory, 0, sizeof(sMemory));
 
-    // nil is 0,1
-    // T is 2,3
+    // nil is 0
+    // T is 1
 
     // NOTE: StartOfMemory corresponds to after these constants
 }
