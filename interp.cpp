@@ -2,6 +2,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
+#include <cctype>
 
 // the unit of allocation is a U64, laid out as:
 //
@@ -15,7 +16,7 @@
 // bit 30 and 29-24 are really just a 7 bit type, but the top bit determines
 // pointer-ness. this is helpful for the GC.
 
-class Type
+struct Type
 {
     // the pointer types (ptr bit not set)
     enum
@@ -172,6 +173,24 @@ bool IsAtom(U32 cell)
 {
     CHECK_ADDR(cell);
     return (sMemory[cell][0] & 0x40000000) != 0;
+}
+
+int CarType(U32 cell)
+{
+    CHECK_ADDR(cell);
+    return (sMemory[cell][0] & 0x7f000000) >> 24;
+}
+
+int CdrType(U32 cell)
+{
+    CHECK_ADDR(cell);
+    return (sMemory[cell][1] & 0x7f000000) >> 24;
+}
+
+U32 Value(U32 type, U32 value)
+{
+    assert(type < 0x7f && value <= 0xffffff);
+    return (type << 24) | value;
 }
 
 void DumpDot()
@@ -331,14 +350,61 @@ void GC()
     Sweep();
 }
 
-void Parse()
+// simple sexp parser, not part of machine?
+static bool atomEnd(char c)
 {
+    return isspace(c) || c == '(' || c == ')' || c == '"' || c == '\'';
 }
 
-static void UnitTests()
+static void stackAppend(U32* stackHead, U32 append)
+{
+    assert(stackHead != 0);
+    U32 newElem = Cons();
+    Rplaca(newElem, append);
+    Rplacd(newElem, *stackHead);
+    *stackHead = newElem;
+}
+
+U32 Parse(const char* sexp)
+{
+    enum ItemType { List, Str, Symbol };
+
+    U32 stack = 0;
+
+    int i = 0;
+    int length = strlen(sexp);
+    ItemType reading = List;
+
+    while (i < length)
+    {
+        char c = sexp[i];
+
+        if (reading == List)
+        {
+            if (c == '(') {}
+            else if (c == ')') {}
+            else
+            {
+                stackAppend(&stack, Value(Type::Symbol, c));
+                reading = Symbol;
+            }
+        }
+        else if (reading == Symbol)
+        {
+            if (atomEnd(c))
+            {
+                assert(false);
+            }
+        }
+        i += 1;
+    }
+
+    return stack;
+}
+
+static void UnitTestBasicAlloc()
 {
     ResetMachine();
-
     /*
         A -> B,C
         B -> nil,nil
@@ -364,6 +430,21 @@ static void UnitTests()
     GC();
     assert(3 + StartOfMemory == sAllocPoint);
     //DumpDot();
+}
+
+static void UnitTestParser()
+{
+    ResetMachine();
+    U32 p;
+    p = Parse("a");
+    assert(CarType(p) == Type::Symbol);
+    assert(Car(p) == 'a');
+}
+
+static void UnitTests()
+{
+    UnitTestBasicAlloc();
+    UnitTestParser();
 }
 
 int main(int argc, char** argv)
