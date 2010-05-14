@@ -225,7 +225,7 @@ U32 ConsInit(U32 a, U32 d)
 // cdr (both bits set), then restore the cdr and go back up to the saved
 // parent and finish the rest of the graph above.
 //
-// (this is called Deutsh-Schorr-Waite, or simply "pointer reversal" for
+// (this is called Deutsch-Schorr-Waite, or simply "pointer reversal" for
 // googling).
 static void Mark(U32 root)
 {
@@ -329,6 +329,10 @@ void GC()
 {
     Mark(StartOfMemory);
     Sweep();
+}
+
+void Parse()
+{
 }
 
 static void UnitTests()
