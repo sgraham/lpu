@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cassert>
 #include <cstdlib>
+#include <cstring>
 
 // the unit of allocation is a U64, laid out as:
 //
@@ -79,7 +80,20 @@ typedef __uint32_t U32;
 
 static const int MaxMemSize = 16*1024*1024;
 static U32 sMemory[MaxMemSize];
-static U32 sAllocPoint = 4;
+static int sAllocPoint = 4;
+static const int StartOfMemory = 4;
+
+void ResetMachine()
+{
+    memset(sMemory, 0, sizeof(sMemory));
+
+    // nil is 0,1
+    // T is 2,3
+
+    // NOTE: StartOfMemory corresponds to after these constants
+}
+
+
 
 #if 0
     #define CHECK_ADDR(_c_) (assert((_c_) % 8 == 0 && (_c_) < MaxMemSize))
@@ -118,19 +132,19 @@ void ClearMark(U32 cell)
     sMemory[cell] &= ~0x80000000;
 }
 
-bool IsFlagged(U32 cell)
+bool IsCdrTraceInProgress(U32 cell)
 {
     CHECK_ADDR(cell);
     return (sMemory[cell + 1] & 0x80000000) != 0;
 }
 
-void SetFlag(U32 cell)
+void SetCdrTraceInProgress(U32 cell)
 {
     CHECK_ADDR(cell);
     sMemory[cell + 1] |= 0x80000000;
 }
 
-void ClearFlag(U32 cell)
+void ClearCdrTraceInProgress(U32 cell)
 {
     CHECK_ADDR(cell);
     sMemory[cell + 1] &= ~0x80000000;
@@ -139,15 +153,19 @@ void ClearFlag(U32 cell)
 void Rplaca(U32 cell, U32 value)
 {
     CHECK_ADDR(cell);
-    sMemory[cell] &= ~0xffffff;
-    sMemory[cell] |= value;
+    sMemory[cell] = value;
+}
+
+void RplacaAndMark(U32 cell, U32 value)
+{
+    CHECK_ADDR(cell);
+    sMemory[cell] = 0x80000000 | value;
 }
 
 void Rplacd(U32 cell, U32 value)
 {
     CHECK_ADDR(cell);
-    sMemory[cell + 1] &= ~0xffffff;
-    sMemory[cell + 1] |= value;
+    sMemory[cell + 1] = value;
 }
 
 bool IsAtom(U32 cell)
@@ -156,25 +174,29 @@ bool IsAtom(U32 cell)
     return (sMemory[cell] & 0x40000000) != 0;
 }
 
-void DumpDot(U32 root)
+void DumpDot()
 {
     FILE* f = fopen("tmp.dot", "wt");
     fprintf(f, "digraph nodes {\n");
     fprintf(f, "graph [\nrankdir = \"LR\"\n];\n");
-    for (int i = 4; i < 14; i += 2)
+    for (int i = StartOfMemory; i < sAllocPoint; i += 2)
     {
-        //if (Car(i) != 0 || Cdr(i) != 0)
-        {
-            fprintf(f, "\"0x%x\" [\n  label = \"<addr> 0x%x (%s%s) | <car> car = ", i, i, IsMarked(i) ? "M" : "", IsFlagged(i) ? "F" : "");
-            if (Car(i) == 0) fprintf(f, "(nil)");
-            else fprintf(f, "0x%x", Car(i));
-            fprintf(f, "| <cdr> cdr = ");
-            if (Cdr(i) == 0) fprintf(f, "(nil)");
-            else fprintf(f, "0x%x", Cdr(i));
-            fprintf(f, "\"\n  shape = \"record\"\n];\n");
-            if (Car(i) != 0) fprintf(f, "\"0x%x\":car -> \"0x%x\":addr;\n", i, Car(i));
-            if (Cdr(i) != 0) fprintf(f, "\"0x%x\":cdr -> \"0x%x\":addr;\n", i, Cdr(i));
-        }
+        fprintf(f,
+                "\"0x%x\" [\n  label = \"<addr> 0x%x (%s%s) | <car> car = ",
+                i,
+                i,
+                IsMarked(i) ? "M" : "",
+                IsCdrTraceInProgress(i) ? "T" : "");
+        if (Car(i) == 0) fprintf(f, "(nil)");
+        else fprintf(f, "0x%x", Car(i));
+        fprintf(f, "| <cdr> cdr = ");
+        if (Cdr(i) == 0) fprintf(f, "(nil)");
+        else fprintf(f, "0x%x", Cdr(i));
+        fprintf(f, "\"\n  shape = \"record\"\n];\n");
+        if (Car(i) != 0)
+            fprintf(f, "\"0x%x\":car -> \"0x%x\":addr;\n", i, Car(i));
+        if (Cdr(i) != 0)
+            fprintf(f, "\"0x%x\":cdr -> \"0x%x\":addr;\n", i, Cdr(i));
     }
     fprintf(f, "}\n");
     fclose(f);
@@ -196,7 +218,16 @@ U32 ConsInit(U32 a, U32 d)
     return p;
 }
 
-void Mark(U32 root)
+// Walk down the cars, setting the mark bit, and replacing the car value with
+// a pointer to the parent. When we get to the end of the car chain, restore
+// car, and replace cdr with parent pointer, and set bit noting that we're on
+// the right side, then continue down the left. if we're done the car and the
+// cdr (both bits set), then restore the cdr and go back up to the saved
+// parent and finish the rest of the graph above.
+//
+// (this is called Deutsh-Schorr-Waite, or simply "pointer reversal" for
+// googling).
+static void Mark(U32 root)
 {
     U32 current = root;
     U32 previous = 0;
@@ -209,18 +240,17 @@ void Mark(U32 root)
             if (!IsAtom(current))
             {
                 U32 next = Car(current);
-                Rplaca(current, previous);
+                RplacaAndMark(current, previous);
                 previous = current;
                 current = next;
             }
         }
 
         // retreat
-        while (previous != 0 && IsFlagged(previous))
+        while (previous != 0 && IsCdrTraceInProgress(previous))
         {
-            ClearFlag(previous);
             U32 next = Cdr(previous);
-            Rplacd(previous, current);
+            Rplacd(previous, current); // clear of CdrTraceInProgress here
             current = previous;
             previous = next;
         }
@@ -228,34 +258,118 @@ void Mark(U32 root)
         if (previous == 0) break;
 
         // switch to cdrs
-        SetFlag(previous);
         U32 next = Car(previous);
-        Rplaca(previous, current);
+        RplacaAndMark(previous, current);
         current = Cdr(previous);
         Rplacd(previous, next);
+        SetCdrTraceInProgress(previous);
     }
 }
 
-int main()
+// Phase 1:
+// Walk from the start of memory at the bottom until finding a non-used (mark
+// bit not set) cell. Walk from the top of the allocations until we find a
+// used (mark bit set) cell. Move the used into the unused. Write a pointer to
+// the new location into the old used location. Continue until the two
+// pointers meet.
+//
+// Phase 2:
+// Iterate through all in use memory (start of memory until where phase 1
+// terminated) and update all pointers: if they point past termination point
+// then they were moved, so update the address with the one that was saved
+// into the old location.
+//
+// This is called "two-finger" sweep (the top and bottom pointers are the
+// fingers).
+static void Sweep()
 {
-    // nil
-    sMemory[0] = 0;
-    sMemory[1] = 0;
+    U32 low = StartOfMemory;
+    U32 high = sAllocPoint - 2;
+    for (;;)
+    {
+        while (!IsMarked(high))
+        {
+            if (high == low) goto donePhase1;
+            high -= 2;
+        }
+        while (IsMarked(low))
+        {
+            if (high == low) goto donePhase1;
+            low += 2;
+        }
+        RplacaAndMark(low, Car(high));
+        Rplacd(low, Cdr(high));
+        Rplaca(high, low); // set broken heart; also clears mark
+    }
+donePhase1:
 
-    // T
-    sMemory[2] = 0;
-    sMemory[3] = 0;
+    assert(low == high);
     
-    U32 p;
-    p = ConsInit(6, 8);
-    p = ConsInit(0, 0);
-    p = ConsInit(10, 0);
-    p = ConsInit(12, 4);
-    p = ConsInit(0, 0);
+    high += 2;
+
+    for (U32 i = StartOfMemory; i < high; i += 2)
+    {
+        if (Car(i) >= high)
+        {
+            Rplaca(i, Car(Car(i)));
+        }
+        if (Cdr(i) >= high)
+        {
+            Rplacd(i, Car(Cdr(i)));
+        }
+
+        // can't save mark data because otherwise the full tree won't be
+        // traversed next time.
+        ClearMark(i);
+    }
+    sAllocPoint = high;
+}
+
+void GC()
+{
+    Mark(StartOfMemory);
+    Sweep();
+}
+
+static void UnitTests()
+{
+    ResetMachine();
+
+    /*
+        A -> B,C
+        B -> nil,nil
+        C -> D,nil
+        D -> E,A
+        E -> nil,nill
+    */
+    ConsInit(6, 8);
+    ConsInit(0, 0);
+    ConsInit(10, 0);
+    ConsInit(12, 4);
+    ConsInit(0, 0);
     
-    Mark(4);
+    GC();
 
-    DumpDot(4);
+    assert(10 + StartOfMemory == sAllocPoint);
+    //DumpDot();
+    
 
+    // nuke C->D ptr which chops off D/E
+    Rplaca(8, 0);
+
+	GC();
+    assert(6 + StartOfMemory == sAllocPoint);
+    //DumpDot();
+}
+
+int main(int argc, char** argv)
+{
+    if (argc >= 2 && strcmp(argv[1], "--tests") == 0)
+    {
+        UnitTests(); // assert on fail
+        return 0;
+    }
+    
+    printf("nothing to do.\n");
     return 0;
 }
