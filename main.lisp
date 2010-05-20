@@ -36,6 +36,8 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defparameter *type-self-eval-ptr*   #b0000000000000000)
 (defparameter *type-if*              #b0001000000000000)
 (defparameter *type-quote*           #b0010000000000000)
+(defparameter *type-car*             #b0011000000000000)
+(defparameter *type-cdr*             #b0100000000000000)
 
 (defparameter *type-self-eval-immed* #b1000000000000000)
 
@@ -105,7 +107,8 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   (if (atom exp)
     (cond ((typep exp 'fixnum)
            (logior *type-self-eval-immed* exp))
-          ((null exp) *type-self-eval-ptr*))
+          ((null exp) *type-self-eval-ptr*)
+          (t (error "unhandled case" exp)))
     (cond ((eq (car exp) 'if)
            (let ((if-cond (cadr exp))
                  (if-then (caddr exp))
@@ -114,7 +117,18 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                            (scompile if-then)
                            (scompile if-else)))
                    (test (scompile if-cond)))
-               (logior *type-if* (prim-cons test tail))))))))
+               (logior *type-if* (prim-cons test tail)))))
+          ((eq (car exp) 'car)
+           (progn
+             (write exp)
+             (write (car exp))
+             (write (cadr exp))
+             (logior *type-car* (scompile (cadr exp)))))
+          ((eq (car exp) 'cdr)
+           (logior *type-cdr* (scompile (cadr exp))))
+          ((eq (car exp) 'quote)
+           (logior *type-self-eval-ptr* (scompile (cadr exp))))
+          (t error "unhandled case" exp))))
 
 (defun spprint (sexp)
   "convert simple machine expr into tagged list format, mostly for debugging"
@@ -127,6 +141,54 @@ remaining 12 bits allow address of 4k cells == 16k bytes
      `(:if ,(spprint (prim-car-raw sexp))
            ,(spprint (prim-car-raw (prim-cdr-raw sexp)))
            ,(spprint (prim-cdr-raw (prim-cdr-raw sexp)))))
+    ((eq (logand *type-mask* sexp) *type-car*)
+     `(:car ,(spprint (prim-car-raw sexp))))
+    ((eq (logand *type-mask* sexp) *type-cdr*)
+     `(:cdr ,(spprint (prim-car-raw sexp))))
     (t (error "unhandled case" sexp))))
-   
 
+(defun sdot (sexp)
+  "convert simple machine expr into graphviz .dot text format"
+  (with-open-file (out "tmp.dot" :direction :output :if-exists :supersede)
+    (format out "digraph nodes {~%")
+    (format out "graph [~%rankdir = \"LR\"~%shape = \"record\"~%];~%")
+    (labels ((sdot-node (node)
+                        (format out "\"0x~x\" [~%" node)
+                        (cond
+                          ((eq (logand *type-mask* node) *type-self-eval-immed*)
+                           (format out "label = \"int ~d\"" (logand node *data-mask*)))
+                          (t (error "unhandled case" node)))
+                        (format out "~%shape = \"record\"~%];~%")))
+             (sdot-node sexp))
+    (format out "}~%")
+    ))
+
+(sdot (scompile 1))
+
+#|
+    FILE* f = fopen("tmp.dot", "wt");
+    fprintf(f, "digraph nodes {\n");
+    fprintf(f, "graph [\nrankdir = \"LR\"\n];\n");
+    for (int i = StartOfMemory; i < sAllocPoint; ++i)
+    {
+        fprintf(f,
+                "\"0x%x\" [\n  label = \"<addr> 0x%x (%s%s) | <car> car = ",
+                i,
+                i,
+                IsMarked(i) ? "M" : "",
+                IsCdrTraceInProgress(i) ? "T" : "");
+        if (Car(i) == 0) fprintf(f, "(nil)");
+        else fprintf(f, "0x%x", Car(i));
+        fprintf(f, "| <cdr> cdr = ");
+        if (Cdr(i) == 0) fprintf(f, "(nil)");
+        else fprintf(f, "0x%x", Cdr(i));
+        fprintf(f, "\"\n  shape = \"record\"\n];\n");
+        if (Car(i) != 0)
+            fprintf(f, "\"0x%x\":car -> \"0x%x\":addr;\n", i, Car(i));
+        if (Cdr(i) != 0)
+            fprintf(f, "\"0x%x\":cdr -> \"0x%x\":addr;\n", i, Cdr(i));
+    }
+    fprintf(f, "}\n");
+    fclose(f);
+    system("dot -Tpng tmp.dot -otmp.png && gnome-open tmp.png");
+|#

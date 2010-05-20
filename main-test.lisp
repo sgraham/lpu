@@ -27,7 +27,13 @@
   (assert-equal
     '(:IF (:INT 1) (:INT 2) (:NIL))
     (spprint (scompile '(if 1 2))))
+  (assert-equal
+    '(:IF (:INT 1) (:IF (:INT 0) (:INT 99) (:INT 88)) (:INT 444))
+    (spprint (scompile '(if 1 (if 0 99 88) 444))))
   )
 
+(spprint (scompile '(car '())))
+(spprint (scompile '(car '(1 2))))
+(spprint (scompile '(cdr '(1 2))))
 
 (run-tests)
