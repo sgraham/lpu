@@ -119,11 +119,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                    (test (scompile if-cond)))
                (logior *type-if* (prim-cons test tail)))))
           ((eq (car exp) 'car)
-           (progn
-             (write exp)
-             (write (car exp))
-             (write (cadr exp))
-             (logior *type-car* (scompile (cadr exp)))))
+           (logior *type-car* (scompile (cadr exp))))
           ((eq (car exp) 'cdr)
            (logior *type-cdr* (scompile (cadr exp))))
           ((eq (car exp) 'quote)
@@ -152,18 +148,56 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   (with-open-file (out "tmp.dot" :direction :output :if-exists :supersede)
     (format out "digraph nodes {~%")
     (format out "graph [~%rankdir = \"LR\"~%shape = \"record\"~%];~%")
-    (labels ((sdot-node (node)
-                        (format out "\"0x~x\" [~%" node)
-                        (cond
-                          ((eq (logand *type-mask* node) *type-self-eval-immed*)
-                           (format out "label = \"int ~d\"" (logand node *data-mask*)))
-                          (t (error "unhandled case" node)))
-                        (format out "~%shape = \"record\"~%];~%")))
-             (sdot-node sexp))
+    (labels ((sdot-node (sexp)
+                        (flet ((head (sexp)
+                                     (format out "~x [~%" sexp))
+                               (tail ()
+                                     (format out "~%shape = \"record\"~%];~%")))
+                          (head sexp)
+                          (cond
+                            ((eq (logand *type-mask* sexp) *type-self-eval-immed*)
+                             (format out "label = \"<head> int ~d\"" (logand sexp *data-mask*)))
+                            ((eq sexp 0)
+                             (format out "label = \"<head> (nil)\""))
+                            ((eq (logand *type-mask* sexp) *type-if*)
+                             ; a bit of extra work for if because we walkt to the then-else too
+                             (format out "label = \"<head> if ~x | <car> car = ~x | <cdr> cdr = ~x\""
+                                     sexp
+                                     (prim-car-raw sexp)
+                                     (prim-cdr-raw sexp))
+                             (tail)
+                             (format out "~x:car -> ~x:head~%" sexp (prim-car-raw sexp))
+                             (format out "~x:cdr -> ~x:head~%" sexp (prim-cdr-raw sexp))
+                             (head (prim-cdr-raw sexp))
+                             (let ((te-sexp (prim-cdr-raw sexp)))
+                               (format out "label = \"<head> then-else ~x | <car> car = ~x | <cdr> cdr = ~x\""
+                                       te-sexp
+                                       (prim-car-raw te-sexp)
+                                       (prim-cdr-raw te-sexp))
+                               (tail)
+                               (format out "~x:car -> ~x:head~%" te-sexp (prim-car-raw te-sexp))
+                               (format out "~x:cdr -> ~x:head~%" te-sexp (prim-cdr-raw te-sexp)))
+                             (sdot-node (prim-car-raw sexp))
+                             (sdot-node (prim-car-raw (prim-cdr-raw sexp)))
+                             (sdot-node (prim-cdr-raw (prim-cdr-raw sexp)))
+                             (head sexp))
+                            (t (error "unhandled case" sexp)))
+                          (tail))))
+      (sdot-node sexp))
     (format out "}~%")
     ))
 
-(sdot (scompile 1))
+(defun sdot-and-view (sexp)
+  "sdot and then run-program to generate and view as png"
+  (sdot sexp)
+  (sb-ext:run-program "/bin/sh" '("-c" "dot -Tpng tmp.dot -otmp.png && gnome-open tmp.png")
+                      :output t
+                      :error :output))
+
+(sdot-and-view (scompile 1))
+(sdot-and-view (scompile '(if 1 2 3)))
+
+
 
 #|
     FILE* f = fopen("tmp.dot", "wt");
