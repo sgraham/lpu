@@ -52,8 +52,14 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defparameter *type-rplacd*          #b0100000000000000)
 (defparameter *type-cons*            #b0101000000000000)
 
+; these need to have the high-bit set because they're or'd into
+; tag bits on a cons cell stored in clink
+(defparameter *type-retloc-if2*      #b1001000000000000)
+(defparameter *type-retloc-evcomb3*  #b1010000000000000)
+
 (defparameter *type-mask*            #b1111000000000000)
 (defparameter *data-mask*            #b0000111111111111)
+(defparameter *data-and-ptr-mask*    #b1000111111111111)
 
 (defparameter *cdr-mask*             #x0000ffff)
 (defparameter *car-mask*             #xffff0000)
@@ -105,21 +111,115 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defvar *prim-nil* (prim-cons 0 0))
 (defvar *prim-t* (prim-cons 0 0))
 
+(defvar *reg-exp* 0)
+(defvar *reg-val* 0)
+(defvar *reg-env* 0)
+(defvar *reg-args* 0)
+(defvar *reg-clink* 0)
+
+(defun print-machine-state ()
+ (format t "~%    exp = 0x~x~%    val = 0x~x~%    env = 0x~x~%    args = 0x~x~%    clink = 0x~x~%"
+  *reg-exp*
+  *reg-val*
+  *reg-env*
+  *reg-args*
+  *reg-clink*))
+
+
+(defun run-machine ()
+  "implementation of the machine. written in an attempted 'hardware'y fashion
+  with no hidden host language control mechanisms"
+
+  (tagbody
+
+    :st-eval
+    (print :st-eval)(print-machine-state)(read-line)
+    (let ((exptype (logand *type-mask* *reg-exp*)))
+      (cond ((= exptype *type-self-eval-immed*) (go :st-self))
+            ((= exptype *type-self-eval-ptr*) (go :st-self))
+            ((= exptype *type-if*) (go :st-if1))
+            ((= exptype *type-retloc-if2*) (go :st-if2))
+            (t (error "unhandled type in eval"))))
+
+
+    :st-self
+    (print :st-self)(print-machine-state)(read-line)
+    (setq *reg-val* *reg-exp*)
+    (go :st-return)
+
+
+    :st-if1
+    (print :st-if)(print-machine-state)(read-line)
+    ; save env, val (now the then/else), and return target (where
+    ; we'll go after evaling the condition)
+    (setq *reg-val* (prim-cdr *reg-exp*))
+    (setq *reg-clink* (prim-cons *reg-env* *reg-clink*))
+    (setq *reg-clink* (logior *type-retloc-if2* (prim-cons *reg-val* *reg-clink*)))
+
+    ; set the expression to be evaluated to the condition, and
+    ; 'recurse' (now that we've saved return info)
+    (setq *reg-exp* (prim-car *reg-exp*))
+    (go :st-eval)
+
+
+    :st-if2
+    (print :st-if2)(print-machine-state)(read-line)
+    ; after we evaluate the condition, we 'return' here to continue
+    ; and evaluate either the 'then' or the 'else' of an if.
+
+    ; first, 'pop' val (into exp) and env from our stack
+    (setq *reg-exp* (prim-car *reg-clink*))
+    (setq *reg-clink* (prim-cdr *reg-clink*))
+
+    (setq *reg-env* (prim-car *reg-clink*))
+    (setq *reg-clink* (prim-cdr *reg-clink*))
+
+    (if (= *reg-val* *type-self-eval-ptr*) ; nil
+      ; if recursive evaluation was nil, then walk to the else
+      ; condition (todo; pack the else into the same cell)
+      ; and then evaluate it
+      (progn
+        (setq *reg-exp* (prim-cdr *reg-exp*))
+        (setq *reg-exp* (prim-car *reg-exp*))
+        (go :st-eval))
+      ; otherwise if it was non-nil, then get the consequent and eval
+      (progn
+        (setq *reg-exp* (prim-car *reg-exp*))
+        (go :st-eval)))
+
+
+    :st-evcomb3 ; todo;
+
+
+    :st-return
+    (print :st-return)(print-machine-state)(read-line)
+    (let ((exptype (logand *type-mask* *reg-clink*)))
+      (cond ((= exptype *type-retloc-if2*) (go :st-if2))
+            ((= exptype *type-retloc-evcomb3*) (go :st-evcomb3))))
+    ))
+
 (defun seval (sexp)
-  (let ((val 0)
-        (env 0)
-        (args 0)
-        (clink 0))
-    (cond
-      ((eq (logand *type-mask* sexp) *type-self-eval-immed*)
-       (logand sexp *data-mask*))
-      ((eq (logand *type-mask* sexp) *type-if*)
-       (progn
-         (setq val (prim-cdr sexp))
-         (setq clink (prim-cons env clink))
-         (setq clink (prim-typed-cons :if2 val clink))
-         (setq sexp (prim-car sexp))))
-      (t nil))))
+  (setq *reg-exp* sexp)
+  (setq *reg-val* 0)
+  (setq *reg-env* 0)
+  (setq *reg-args* 0)
+  (setq *reg-clink* 0)
+  (sdot-and-view sexp)
+  (run-machine)
+  *reg-val*)
+
+;    (cond
+;      ((eq (logand *type-mask* sexp) *type-self-eval-immed*)
+;       (logand sexp *data-mask*))
+;      ((eq (logand *type-mask* sexp) *type-if*)
+;       (progn
+;         (setq val (prim-cdr sexp))
+;         (setq clink (prim-cons env clink))
+;         (setq clink (prim-typed-cons :if2 val clink))
+;         (setq sexp (prim-car sexp))))
+;      (t nil))))
+
+(seval (scompile '(if 1 2)))
 
 
 (defun list->prim-list (L &key (set-end *type-self-eval-ptr*))
@@ -200,7 +300,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
          (format nil "IF (0x~x)" p))
         ((prim-call? p)
          (format nil "CALL (0x~x)" p))
-        (t (format nil "UNK 0x~x" p))))
+        (t (format nil "PTR 0x~x" p))))
 
 (defun node->dot (p)
   (if (prim-atom? p)
