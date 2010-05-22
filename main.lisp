@@ -13,6 +13,11 @@ probably need some more for gc to be written in code
 cons-in-other-space, rplaca-in-other-space, etc.
 plus flip space
 
+perhaps use data bits in primitives to indicate other half-space?
+hmm, wait. all those primitive functions can be one type that
+dispatch on more bits in data so we dont' have to try to cram into
+the 3 bits?
+
 registers:
 
 exp: expression being evaluated
@@ -38,6 +43,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defparameter *type-self-eval-ptr*   #b1000000000000000)
 (defparameter *type-if*              #b1001000000000000)
 (defparameter *type-call*            #b1010000000000000)
+(defparameter *type-symbol*          #b1011000000000000)
 
 (defparameter *type-self-eval-immed* #b0000000000000000)
 (defparameter *type-car*             #b0001000000000000)
