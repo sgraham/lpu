@@ -44,6 +44,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defparameter *type-cdr*             #b0010000000000000)
 (defparameter *type-rplaca*          #b0011000000000000)
 (defparameter *type-rplacd*          #b0100000000000000)
+(defparameter *type-cons*            #b0101000000000000)
 
 (defparameter *type-mask*            #b1111000000000000)
 (defparameter *data-mask*            #b0000111111111111)
@@ -65,6 +66,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defun prim-cdr? (p) (= (logand p *type-mask*) *type-cdr*))
 (defun prim-rplaca? (p) (= (logand p *type-mask*) *type-rplaca*))
 (defun prim-rplacd? (p) (= (logand p *type-mask*) *type-rplacd*))
+(defun prim-cons? (p) (= (logand p *type-mask*) *type-cons*))
 
 (defun prim-get-data (p) (logand p *data-mask*))
 
@@ -93,6 +95,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
     (logior *type-self-eval-ptr* loc)))
 
 
+; relies on load order; prim-nil has to be address 0
 (defvar *prim-nil* (prim-cons 0 0))
 (defvar *prim-t* (prim-cons 0 0))
 
@@ -139,6 +142,10 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                                           (prim-cons (scompile (cadr exp))
                                                      (prim-cons (scompile (caddr exp))
                                                                 *type-rplacd*))))
+          ((eq (car exp) 'cons) (logior *type-call*
+                                          (prim-cons (scompile (cadr exp))
+                                                     (prim-cons (scompile (caddr exp))
+                                                                *type-cons*))))
           ((eq (car exp) 'quote) (list->prim-list (mapcar #'scompile (cadr exp))))
           (t (logior *type-call* (list->prim-list (mapcar #'scompile (cdr exp))
                                                   :set-end (scompile (car exp))))))))
@@ -148,7 +155,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 ;(sdot-and-view (scompile '(if 1 2)))
 ;(sdot-and-view (scompile '(88 9 4 8)))
 
-(sdot-and-view (scompile '(rplacd 3 4)))
+(sdot-and-view (scompile '(cons 3 4)))
 
 (defun spprint (sexp)
   "convert simple machine expr into tagged list format, mostly for debugging"
@@ -181,6 +188,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                ((prim-cdr? p) "CDR")
                ((prim-rplaca? p) "RPLACA")
                ((prim-rplacd? p) "RPLACD")
+               ((prim-cons? p) "CONS")
                (t (format nil "INT ~a" (prim-get-data p)))))
         ((prim-if? p)
          (format nil "IF (0x~x)" p))
