@@ -37,11 +37,11 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
 (defparameter *type-self-eval-ptr*   #b1000000000000000)
 (defparameter *type-if*              #b1001000000000000)
-(defparameter *type-quote*           #b1010000000000000)
-(defparameter *type-car*             #b1011000000000000)
-(defparameter *type-cdr*             #b1100000000000000)
+(defparameter *type-call*            #b1010000000000000)
 
 (defparameter *type-self-eval-immed* #b0000000000000000)
+(defparameter *type-car*             #b0001000000000000)
+(defparameter *type-cdr*             #b0010000000000000)
 
 (defparameter *type-mask*            #b1111000000000000)
 (defparameter *data-mask*            #b0000111111111111)
@@ -57,7 +57,10 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                         (= (logand p *type-is-ptr-mask*) *type-is-ptr-mask*)
                         (not (= p *type-self-eval-ptr*)))) ; nil
 (defun prim-atom? (p) (not (prim-list? p)))
-(defun prim-if? (p) (= (logand p *type-if*) *type-if*))
+(defun prim-if? (p) (= (logand p *type-mask*) *type-if*))
+(defun prim-call? (p) (= (logand p *type-mask*) *type-call*))
+(defun prim-car? (p) (= (logand p *type-mask*) *type-car*))
+(defun prim-cdr? (p) (= (logand p *type-mask*) *type-cdr*))
 
 (defun prim-get-data (p) (logand p *data-mask*))
 
@@ -106,6 +109,13 @@ remaining 12 bits allow address of 4k cells == 16k bytes
       (t nil))))
 
 
+(defun list->prim-list (L &key (set-end *type-self-eval-ptr*))
+  (if (null L)
+    set-end
+    (prim-cons (car L) (list->prim-list (cdr L) :set-end set-end))))
+
+;(sdot-and-view (list->prim-list '(1 2 3)))
+
 (defun scompile (exp)
   "Convert regular lisp expression to simple expression to be evaluated by
   machine/seval"
@@ -114,26 +124,18 @@ remaining 12 bits allow address of 4k cells == 16k bytes
            (logior *type-self-eval-immed* exp))
           ((null exp) *type-self-eval-ptr*)
           (t (error "unhandled case" exp)))
-    (cond ((eq (car exp) 'if)
-           (let ((if-cond (cadr exp))
-                 (if-then (caddr exp))
-                 (if-else (cadddr exp)))
-             (write if-cond)
-             (write if-then)
-             (write if-else)
-             (let ((conditional (scompile if-cond))
-                   (consequent (scompile if-then))
-                   (alternative (scompile if-else)))
-               (logior *type-if* (prim-cons conditional
-                                            (prim-cons consequent
-                                                       (prim-cons alternative *prim-nil*)))))))
-          ((eq (car exp) 'car)
-           (logior *type-car* (scompile (cadr exp))))
-          ((eq (car exp) 'cdr)
-           (logior *type-cdr* (scompile (cadr exp))))
-          ((eq (car exp) 'quote)
-           (logior *type-self-eval-ptr* (scompile (cadr exp))))
-          (t error "unhandled case" exp))))
+    (cond ((eq (car exp) 'if) (logior *type-if* (list->prim-list (mapcar #'scompile (cdr exp)))))
+          ((eq (car exp) 'car) (logior *type-call* (prim-cons (scompile (cadr exp)) *type-car*)))
+          ((eq (car exp) 'cdr) (logior *type-call* (prim-cons (scompile (cadr exp)) *type-cdr*)))
+          (t (logior *type-call* (list->prim-list (mapcar #'scompile (cdr exp))
+                                                  :set-end (scompile (car exp))))))))
+
+;(sdot-and-view (scompile 99))
+;(sdot-and-view (scompile '(if 1 2 3)))
+;(sdot-and-view (scompile '(if 1 2)))
+;(sdot-and-view (scompile '(88 9 4 8)))
+
+;(sdot-and-view (scompile '(car 7)))
 
 (defun spprint (sexp)
   "convert simple machine expr into tagged list format, mostly for debugging"
@@ -162,9 +164,13 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   (cond ((eq p *type-self-eval-ptr*)
          "(nil)")
         ((prim-atom? p)
-         (format nil "INT ~a" (prim-get-data p)))
+         (cond ((prim-car? p) "CAR")
+               ((prim-cdr? p) "CDR")
+               (t (format nil "INT ~a" (prim-get-data p)))))
         ((prim-if? p)
          (format nil "IF (0x~x)" p))
+        ((prim-call? p)
+         (format nil "CALL (0x~x)" p))
         (t (format nil "UNK 0x~x" p))))
 
 (defun node->dot (p)
@@ -210,7 +216,4 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                       :output t
                       :error :output))
 
-;(sdot-and-view (scompile 99))
-;(sdot-and-view (scompile '(if 1 2 3)))
-;(sdot-and-view (scompile '(if 1 2)))
 
