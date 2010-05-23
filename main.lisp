@@ -43,7 +43,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defparameter *type-self-eval-ptr*   #b1000000000000000)
 (defparameter *type-if*              #b1001000000000000)
 (defparameter *type-call*            #b1010000000000000)
-(defparameter *type-symbol*          #b1011000000000000)
+(defparameter *type-lambda*          #b1100000000000000)
 
 (defparameter *type-self-eval-immed* #b0000000000000000)
 (defparameter *type-car*             #b0001000000000000)
@@ -51,6 +51,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defparameter *type-rplaca*          #b0011000000000000)
 (defparameter *type-rplacd*          #b0100000000000000)
 (defparameter *type-cons*            #b0101000000000000)
+(defparameter *type-symbol*          #b0110000000000000)
 
 ; these need to have the high-bit set because they're or'd into
 ; tag bits on a cons cell stored in clink
@@ -73,12 +74,14 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                         (not (= p *type-self-eval-ptr*)))) ; nil
 (defun prim-atom? (p) (not (prim-list? p)))
 (defun prim-if? (p) (= (logand p *type-mask*) *type-if*))
+(defun prim-lambda? (p) (= (logand p *type-mask*) *type-lambda*))
 (defun prim-call? (p) (= (logand p *type-mask*) *type-call*))
 (defun prim-car? (p) (= (logand p *type-mask*) *type-car*))
 (defun prim-cdr? (p) (= (logand p *type-mask*) *type-cdr*))
 (defun prim-rplaca? (p) (= (logand p *type-mask*) *type-rplaca*))
 (defun prim-rplacd? (p) (= (logand p *type-mask*) *type-rplacd*))
 (defun prim-cons? (p) (= (logand p *type-mask*) *type-cons*))
+(defun prim-symbol? (p) (= (logand p *type-mask*) *type-symbol*))
 
 (defun prim-get-data (p) (logand p *data-mask*))
 
@@ -107,6 +110,21 @@ remaining 12 bits allow address of 4k cells == 16k bytes
     (logior *type-self-eval-ptr* loc)))
 
 
+(defparameter *prim-intern-hash* (make-hash-table :test #'equal))
+(defvar *prim-intern-count* 0)
+(defun prim-intern (sym)
+  (let ((symname (symbol-name sym)))
+    (multiple-value-bind (value present) (gethash symname *prim-intern-hash*)
+      (if present
+        value
+        (setf (gethash symname *prim-intern-hash*)
+              (incf *prim-intern-count*))))))
+(defun prim-symbol-name (sym)
+  (maphash #'(lambda (k v)
+               (if (= v sym)
+                 (return-from prim-symbol-name k)))
+           *prim-intern-hash*))
+
 ; relies on load order; prim-nil has to be address 0
 (defvar *prim-nil* (prim-cons 0 0))
 (defvar *prim-t* (prim-cons 0 0))
@@ -128,6 +146,9 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defvar *machine-logging* nil)
 (defvar *machine-single-step* nil)
 
+; would be nice to make this part of the state def too, but I couldn't figure
+; out how, at least without writing a full code walker for the whole machine
+; function.
 (defmacro mach-debug (name)
   `(progn
      (if *machine-logging*
@@ -140,7 +161,6 @@ remaining 12 bits allow address of 4k cells == 16k bytes
          (force-output)
          (read-line)))))
 
-(macroexpand-1 '(mach-debug eval))
 
 (defun run-machine ()
   "implementation of the machine. written in an attempted 'hardware'y fashion
@@ -230,24 +250,26 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 ;         (setq sexp (prim-car sexp))))
 ;      (t nil))))
 
-(seval (scompile '(if 1 2)))
+;(seval (scompile '(if 1 2)))
 
+;(sdot-and-view (scompile '(lambda () 4)))
 
 (defun list->prim-list (L &key (set-end *type-self-eval-ptr*))
   (if (null L)
     set-end
     (prim-cons (car L) (list->prim-list (cdr L) :set-end set-end))))
 
-;(sdot-and-view (list->prim-list '(1 2 3)))
-
 (defun scompile (exp)
   "Convert regular lisp expression to simple expression to be evaluated by
   machine/seval"
+
   (if (atom exp)
     (cond ((typep exp 'fixnum)
            (logior *type-self-eval-immed* exp))
           ((null exp) *type-self-eval-ptr*)
-          (t (error "unhandled case" exp)))
+          ((typep exp 'symbol)
+           (logior *type-symbol* (prim-intern exp)))
+          (t (error "unhandled case")))
     (cond ((eq (car exp) 'if) (logior *type-if* (list->prim-list (mapcar #'scompile (cdr exp)))))
           ((eq (car exp) 'car) (logior *type-call* (prim-cons (scompile (cadr exp)) *type-car*)))
           ((eq (car exp) 'cdr) (logior *type-call* (prim-cons (scompile (cadr exp)) *type-cdr*)))
@@ -260,10 +282,13 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                                                      (prim-cons (scompile (caddr exp))
                                                                 *type-rplacd*))))
           ((eq (car exp) 'cons) (logior *type-call*
-                                          (prim-cons (scompile (cadr exp))
-                                                     (prim-cons (scompile (caddr exp))
-                                                                *type-cons*))))
+                                        (prim-cons (scompile (cadr exp))
+                                                   (prim-cons (scompile (caddr exp))
+                                                              *type-cons*))))
           ((eq (car exp) 'quote) (list->prim-list (mapcar #'scompile (cadr exp))))
+          ((eq (car exp) 'lambda) (logior *type-lambda*
+                                          (prim-cons (list->prim-list (mapcar #'scompile (cadr exp)))
+                                                     (scompile (caddr exp)))))
           (t (logior *type-call* (list->prim-list (mapcar #'scompile (cdr exp))
                                                   :set-end (scompile (car exp))))))))
 
@@ -272,7 +297,9 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 ;(sdot-and-view (scompile '(if 1 2)))
 ;(sdot-and-view (scompile '(88 9 4 8)))
 
-(sdot-and-view (scompile '(cons 3 4)))
+;(sdot-and-view (scompile '(cons 3 4)))
+
+;(sdot-and-view (scompile '(lambda (a b c) (inc a b c))))
 
 (defun spprint (sexp)
   "convert simple machine expr into tagged list format, mostly for debugging"
@@ -306,9 +333,12 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                ((prim-rplaca? p) "RPLACA")
                ((prim-rplacd? p) "RPLACD")
                ((prim-cons? p) "CONS")
+               ((prim-symbol? p) (format nil "SYMBOL (~a) = '~a'" p (prim-symbol-name (prim-get-data p))))
                (t (format nil "INT ~a" (prim-get-data p)))))
         ((prim-if? p)
          (format nil "IF (0x~x)" p))
+        ((prim-lambda? p)
+         (format nil "LAMBDA (0x~x)" p))
         ((prim-call? p)
          (format nil "CALL (0x~x)" p))
         (t (format nil "PTR 0x~x" p))))
@@ -319,12 +349,8 @@ remaining 12 bits allow address of 4k cells == 16k bytes
     (format nil "\"0x~x\" [ label = \"<addr> @ 0x~x | <car> ~a | <cdr> ~a\" shape = \"record\" ];~%"
             p
             p
-            (if (prim-atom? (prim-car p))
-              (node-label (prim-car p))
-              (format nil "0x~x" (prim-car p)))
-            (if (prim-atom? (prim-cdr p))
-              (node-label (prim-cdr p))
-              (format nil "0x~x" (prim-cdr p))))))
+            (node-label (prim-car p))
+            (node-label (prim-cdr p)))))
 
 (defun node-connections (p)
   (let ((ret nil))
@@ -332,7 +358,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
       (setq ret (cons (format nil "\"0x~x\":car -> \"0x~x\":addr;~%" p (prim-car p)) ret)))
     (if (and (prim-list? p) (prim-list? (prim-cdr p)))
       (setq ret (cons (format nil "\"0x~x\":cdr -> \"0x~x\":addr;~%" p (prim-cdr p)) ret)))
-    (reduce (lambda (a b) (concatenate 'string a b)) ret :initial-value "")))
+    (reduce #'(lambda (a b) (concatenate 'string a b)) ret :initial-value "")))
 
 (defun sdot (sexp)
   "convert simple machine expr into graphviz .dot text format"
