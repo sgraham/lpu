@@ -125,6 +125,22 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   *reg-args*
   *reg-clink*))
 
+(defvar *machine-logging* nil)
+(defvar *machine-single-step* nil)
+
+(defmacro mach-debug (name)
+  `(progn
+     (if *machine-logging*
+       (progn
+         (princ (symbol-name ',name))
+         (print-machine-state)))
+     (if *machine-single-step*
+       (progn
+         (princ "... ret to step")
+         (force-output)
+         (read-line)))))
+
+(macroexpand-1 '(mach-debug eval))
 
 (defun run-machine ()
   "implementation of the machine. written in an attempted 'hardware'y fashion
@@ -132,8 +148,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
   (tagbody
 
-    :st-eval
-    (print :st-eval)(print-machine-state)(read-line)
+    :st-eval (mach-debug eval)
     (let ((exptype (logand *type-mask* *reg-exp*)))
       (cond ((= exptype *type-self-eval-immed*) (go :st-self))
             ((= exptype *type-self-eval-ptr*) (go :st-self))
@@ -142,14 +157,12 @@ remaining 12 bits allow address of 4k cells == 16k bytes
             (t (error "unhandled type in eval"))))
 
 
-    :st-self
-    (print :st-self)(print-machine-state)(read-line)
+    :st-self (mach-debug self)
     (setq *reg-val* *reg-exp*)
     (go :st-return)
 
 
-    :st-if1
-    (print :st-if)(print-machine-state)(read-line)
+    :st-if1 (mach-debug if)
     ; save env, val (now the then/else), and return target (where
     ; we'll go after evaling the condition)
     (setq *reg-val* (prim-cdr *reg-exp*))
@@ -162,8 +175,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
     (go :st-eval)
 
 
-    :st-if2
-    (print :st-if2)(print-machine-state)(read-line)
+    :st-if2 (mach-debug if2)
     ; after we evaluate the condition, we 'return' here to continue
     ; and evaluate either the 'then' or the 'else' of an if.
 
@@ -188,11 +200,10 @@ remaining 12 bits allow address of 4k cells == 16k bytes
         (go :st-eval)))
 
 
-    :st-evcomb3 ; todo;
+    :st-evcomb3 (mach-debug evcomb3)
 
 
-    :st-return
-    (print :st-return)(print-machine-state)(read-line)
+    :st-return (mach-debug return)
     (let ((exptype (logand *type-mask* *reg-clink*)))
       (cond ((= exptype *type-retloc-if2*) (go :st-if2))
             ((= exptype *type-retloc-evcomb3*) (go :st-evcomb3))))
