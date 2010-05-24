@@ -43,7 +43,8 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defparameter *type-self-eval-ptr*   #b1000000000000000)
 (defparameter *type-if*              #b1001000000000000)
 (defparameter *type-call*            #b1010000000000000)
-(defparameter *type-lambda*          #b1100000000000000)
+(defparameter *type-lambda*          #b1100000000000000) ; lambda is the source item that creates a
+(defparameter *type-closure*         #b1101000000000000) ; closure when eval'd (which includes the env)
 
 (defparameter *type-self-eval-immed* #b0000000000000000)
 (defparameter *type-car*             #b0001000000000000)
@@ -143,13 +144,13 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   *reg-args*
   *reg-clink*))
 
-(defvar *machine-logging* nil)
-(defvar *machine-single-step* nil)
+(defparameter *machine-logging* t)
+(defparameter *machine-single-step* nil)
 
 ; would be nice to make this part of the state def too, but I couldn't figure
 ; out how, at least without writing a full code walker for the whole machine
 ; function.
-(defmacro mach-debug (name)
+(defmacro STATE-DEBUG (name)
   `(progn
      (if *machine-logging*
        (progn
@@ -168,21 +169,31 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
   (tagbody
 
-    :st-eval (mach-debug eval)
+    ; ------------------------------------------
+    :st-eval (STATE-DEBUG eval)
     (let ((exptype (logand *type-mask* *reg-exp*)))
       (cond ((= exptype *type-self-eval-immed*) (go :st-self))
             ((= exptype *type-self-eval-ptr*) (go :st-self))
+            ((= exptype *type-symbol*) (go :st-self))
             ((= exptype *type-if*) (go :st-if1))
-            ((= exptype *type-retloc-if2*) (go :st-if2))
+            ((= exptype *type-lambda*) (go :st-lambda))
             (t (error "unhandled type in eval"))))
 
 
-    :st-self (mach-debug self)
+    ; ------------------------------------------
+    :st-self (STATE-DEBUG self)
     (setq *reg-val* *reg-exp*)
     (go :st-return)
 
 
-    :st-if1 (mach-debug if)
+    ; ------------------------------------------
+    :st-lambda (STATE-DEBUG lambda)
+    (setq *reg-val* (logior *type-closure* (prim-cons *reg-exp* *reg-env*)))
+    (go :st-return)
+
+
+    ; ------------------------------------------
+    :st-if1 (STATE-DEBUG if)
     ; save env, val (now the then/else), and return target (where
     ; we'll go after evaling the condition)
     (setq *reg-val* (prim-cdr *reg-exp*))
@@ -195,7 +206,8 @@ remaining 12 bits allow address of 4k cells == 16k bytes
     (go :st-eval)
 
 
-    :st-if2 (mach-debug if2)
+    ; ------------------------------------------
+    :st-if2 (STATE-DEBUG if2)
     ; after we evaluate the condition, we 'return' here to continue
     ; and evaluate either the 'then' or the 'else' of an if.
 
@@ -220,10 +232,12 @@ remaining 12 bits allow address of 4k cells == 16k bytes
         (go :st-eval)))
 
 
-    :st-evcomb3 (mach-debug evcomb3)
+    ; ------------------------------------------
+    :st-evcomb3 (STATE-DEBUG evcomb3)
 
 
-    :st-return (mach-debug return)
+    ; ------------------------------------------
+    :st-return (STATE-DEBUG return)
     (let ((exptype (logand *type-mask* *reg-clink*)))
       (cond ((= exptype *type-retloc-if2*) (go :st-if2))
             ((= exptype *type-retloc-evcomb3*) (go :st-evcomb3))))
@@ -239,18 +253,8 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   (run-machine)
   *reg-val*)
 
-;    (cond
-;      ((eq (logand *type-mask* sexp) *type-self-eval-immed*)
-;       (logand sexp *data-mask*))
-;      ((eq (logand *type-mask* sexp) *type-if*)
-;       (progn
-;         (setq val (prim-cdr sexp))
-;         (setq clink (prim-cons env clink))
-;         (setq clink (prim-typed-cons :if2 val clink))
-;         (setq sexp (prim-car sexp))))
-;      (t nil))))
-
-;(seval (scompile '(if 1 2)))
+;(seval (scompile '((lambda () 1))))
+;(seval (scompile '(a)))
 
 ;(sdot-and-view (scompile '(lambda () 4)))
 
@@ -289,8 +293,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
           ((eq (car exp) 'lambda) (logior *type-lambda*
                                           (prim-cons (list->prim-list (mapcar #'scompile (cadr exp)))
                                                      (scompile (caddr exp)))))
-          (t (logior *type-call* (list->prim-list (mapcar #'scompile (cdr exp))
-                                                  :set-end (scompile (car exp))))))))
+          (t (logior *type-call* (list->prim-list (mapcar #'scompile exp)))))))
 
 ;(sdot-and-view (scompile 99))
 ;(sdot-and-view (scompile '(if 1 2 3)))
@@ -299,24 +302,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
 ;(sdot-and-view (scompile '(cons 3 4)))
 
-;(sdot-and-view (scompile '(lambda (a b c) (inc a b c))))
-
-(defun spprint (sexp)
-  "convert simple machine expr into tagged list format, mostly for debugging"
-  (cond
-    ((eq (logand *type-mask* sexp) *type-self-eval-immed*)
-     `(:int ,(logand sexp *data-mask*)))
-    ((eq sexp 0)
-     '(:nil))
-    ((eq (logand *type-mask* sexp) *type-if*)
-     `(:if ,(spprint (prim-car sexp))
-           ,(spprint (prim-car (prim-cdr sexp)))
-           ,(spprint (prim-cdr (prim-cdr sexp)))))
-    ((eq (logand *type-mask* sexp) *type-car*)
-     `(:car ,(spprint (prim-car sexp))))
-    ((eq (logand *type-mask* sexp) *type-cdr*)
-     `(:cdr ,(spprint (prim-car sexp))))
-    (t (error "unhandled case" sexp))))
+(sdot-and-view (scompile '(1 2 3)))
 
 (defun get-attached-nodes (p &optional ret)
   (if (prim-list? p)
@@ -352,7 +338,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
             (node-label (prim-car p))
             (node-label (prim-cdr p)))))
 
-(defun node-connections (p)
+(defun node-dot-connections (p)
   (let ((ret nil))
     (if (and (prim-list? p) (prim-list? (prim-car p)))
       (setq ret (cons (format nil "\"0x~x\":car -> \"0x~x\":addr;~%" p (prim-car p)) ret)))
@@ -367,7 +353,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
     (format out "graph [~%rankdir = \"LR\"~%shape = \"record\"~%];~%")
     (let* ((nodelist (get-attached-nodes sexp))
            (nodes-as-string (mapcar #'node->dot nodelist))
-           (connections (mapcar #'node-connections nodelist)))
+           (connections (mapcar #'node-dot-connections nodelist)))
       (loop for node in nodes-as-string do (princ node out))
       (loop for cnx in connections do (princ cnx out)))
     (format out "start [ label = \"~a\" ];~%" (node-label sexp))
@@ -383,3 +369,15 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                       :error :output))
 
 
+(defun spprint-node (p prefix indent)
+  (format t "~a~a~a~%" indent prefix (node-label p))
+  (if (prim-list? p)
+    (let ((nextindent (concatenate 'string indent "  ")))
+      (spprint-node (prim-car p) "A:" nextindent)
+      (spprint-node (prim-cdr p) "D:" nextindent))))
+
+(defun spprint (p)
+  "convert simple machine expr into (sorta) readable string. for debugging and unit tests."
+  (spprint-node p "" ""))
+
+(spprint (scompile '(1 2 3)))
