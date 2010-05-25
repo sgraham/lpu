@@ -11,29 +11,61 @@
 
 
 (define-test simple-compile
-  (assert-equal (+ #x8000 13) (scompile 13))
-  (assert-equal 0 (scompile '()))
-  (assert-equal 0 (scompile nil))
-  (assert-equal #x8000 (scompile 0))
+  (assert-equal 13 (scompile 13))
+  (assert-equal #x8000 (scompile '()))
+  (assert-equal #x8000 (scompile nil))
+  (assert-equal 0 (scompile 0))
   )
 
-(define-test simple-pprint
+(define-test simple-compile-and-pprint
   (assert-equal
-    '(:int 1)
+    "INT 1"
     (spprint (scompile 1)))
   (assert-equal
-    '(:IF (:INT 848) (:NIL) (:NIL))
+    '("IF" ("INT 848" "(nil)"))
     (spprint (scompile '(if 848))))
   (assert-equal
-    '(:IF (:INT 1) (:INT 2) (:NIL))
+    '("IF" ("INT 1" ("PTR" ("INT 2" "(nil)"))))
     (spprint (scompile '(if 1 2))))
   (assert-equal
-    '(:IF (:INT 1) (:IF (:INT 0) (:INT 99) (:INT 88)) (:INT 444))
+    '("IF"
+      ("INT 1"
+       ("PTR"
+        (("IF" ("INT 0" ("PTR" ("INT 99" ("PTR" ("INT 88" "(nil)"))))))
+         ("PTR" ("INT 444" "(nil)"))))))
     (spprint (scompile '(if 1 (if 0 99 88) 444))))
+  (assert-equal
+    '("CALL" ("INT 1" ("PTR" ("INT 2" ("PTR" ("INT 3" "(nil)"))))))
+    (spprint (scompile '(1 2 3))))
+  (assert-equal
+    '("CALL" ("CONS" ("PTR" ("INT 3" ("PTR" ("INT 4" "(nil)"))))))
+    (spprint (scompile '(cons 3 4))))
+  (assert-equal
+    "SYMBOL = 'X'"
+    (spprint (scompile 'x)))
+  (assert-equal
+    "SYMBOL = 'BLORP'"
+    (spprint (scompile 'blORp)))
+  (assert-equal
+    '("CALL" ("CAR" ("PTR" ("SYMBOL = 'STUFF'" "(nil)"))))
+    (spprint (scompile '(car stuff))))
+  (assert-equal
+    '("CALL" ("CDR" ("PTR" ("SYMBOL = 'STUFF'" "(nil)"))))
+    (spprint (scompile '(cdr stuff))))
+  (assert-equal
+    '("CALL"
+      ("CONS" ("PTR" ("SYMBOL = 'STUFF'" ("PTR" ("SYMBOL = 'THINGS'" "(nil)"))))))
+    (spprint (scompile '(cons stuff things))))
+  (assert-equal
+    '("CALL"
+      ("RPLACA" ("PTR" ("SYMBOL = 'STUFF'" ("PTR" ("SYMBOL = 'THINGS'" "(nil)"))))))
+    (spprint (scompile '(rplaca stuff things))))
+  (assert-equal
+    '("CALL"
+      ("RPLACD" ("PTR" ("SYMBOL = 'STUFF'" ("PTR" ("SYMBOL = 'THINGS'" "(nil)"))))))
+    (spprint (scompile '(rplacd stuff things))))
   )
 
-(spprint (scompile '(car '())))
-(spprint (scompile '(car '(1 2))))
-(spprint (scompile '(cdr '(1 2))))
+
 
 (run-tests)

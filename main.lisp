@@ -144,7 +144,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   *reg-args*
   *reg-clink*))
 
-(defparameter *machine-logging* t)
+(defparameter *machine-logging* nil)
 (defparameter *machine-single-step* nil)
 
 ; would be nice to make this part of the state def too, but I couldn't figure
@@ -249,7 +249,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   (setq *reg-env* 0)
   (setq *reg-args* 0)
   (setq *reg-clink* 0)
-  (sdot-and-view sexp)
+  ;(sdot-and-view sexp)
   (run-machine)
   *reg-val*)
 
@@ -258,10 +258,13 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
 ;(sdot-and-view (scompile '(lambda () 4)))
 
-(defun list->prim-list (L &key (set-end *type-self-eval-ptr*))
+(defun list->prim-list (L)
   (if (null L)
-    set-end
-    (prim-cons (car L) (list->prim-list (cdr L) :set-end set-end))))
+    *type-self-eval-ptr*
+    (prim-cons (car L) (list->prim-list (cdr L)))))
+
+(defun list->call (L)
+  (logior *type-call* (list->prim-list L)))
 
 (defun scompile (exp)
   "Convert regular lisp expression to simple expression to be evaluated by
@@ -275,25 +278,22 @@ remaining 12 bits allow address of 4k cells == 16k bytes
            (logior *type-symbol* (prim-intern exp)))
           (t (error "unhandled case")))
     (cond ((eq (car exp) 'if) (logior *type-if* (list->prim-list (mapcar #'scompile (cdr exp)))))
-          ((eq (car exp) 'car) (logior *type-call* (prim-cons (scompile (cadr exp)) *type-car*)))
-          ((eq (car exp) 'cdr) (logior *type-call* (prim-cons (scompile (cadr exp)) *type-cdr*)))
-          ((eq (car exp) 'rplaca) (logior *type-call*
-                                          (prim-cons (scompile (cadr exp))
-                                                     (prim-cons (scompile (caddr exp))
-                                                                *type-rplaca*))))
-          ((eq (car exp) 'rplacd) (logior *type-call*
-                                          (prim-cons (scompile (cadr exp))
-                                                     (prim-cons (scompile (caddr exp))
-                                                                *type-rplacd*))))
-          ((eq (car exp) 'cons) (logior *type-call*
-                                        (prim-cons (scompile (cadr exp))
-                                                   (prim-cons (scompile (caddr exp))
-                                                              *type-cons*))))
+          ((eq (car exp) 'car) (list->call `(,*type-car* ,(scompile (cadr exp)))))
+          ((eq (car exp) 'cdr) (list->call `(,*type-cdr* ,(scompile (cadr exp)))))
+          ((eq (car exp) 'rplaca) (list->call `(,*type-rplaca*
+                                                 ,(scompile (cadr exp))
+                                                 ,(scompile (caddr exp)))))
+          ((eq (car exp) 'rplacd) (list->call `(,*type-rplacd*
+                                                 ,(scompile (cadr exp))
+                                                 ,(scompile (caddr exp)))))
+          ((eq (car exp) 'cons) (list->call `(,*type-cons*
+                                                    ,(scompile (cadr exp))
+                                                    ,(scompile (caddr exp)))))
           ((eq (car exp) 'quote) (list->prim-list (mapcar #'scompile (cadr exp))))
           ((eq (car exp) 'lambda) (logior *type-lambda*
                                           (prim-cons (list->prim-list (mapcar #'scompile (cadr exp)))
                                                      (scompile (caddr exp)))))
-          (t (logior *type-call* (list->prim-list (mapcar #'scompile exp)))))))
+          (t (list->call (mapcar #'scompile exp))))))
 
 ;(sdot-and-view (scompile 99))
 ;(sdot-and-view (scompile '(if 1 2 3)))
@@ -310,24 +310,25 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                         (get-attached-nodes (prim-car p) (cons p ret)))
     ret))
 
-(defun node-label (p)
-  (cond ((eq p *type-self-eval-ptr*)
-         "(nil)")
-        ((prim-atom? p)
-         (cond ((prim-car? p) "CAR")
-               ((prim-cdr? p) "CDR")
-               ((prim-rplaca? p) "RPLACA")
-               ((prim-rplacd? p) "RPLACD")
-               ((prim-cons? p) "CONS")
-               ((prim-symbol? p) (format nil "SYMBOL (~a) = '~a'" p (prim-symbol-name (prim-get-data p))))
-               (t (format nil "INT ~a" (prim-get-data p)))))
-        ((prim-if? p)
-         (format nil "IF (0x~x)" p))
-        ((prim-lambda? p)
-         (format nil "LAMBDA (0x~x)" p))
-        ((prim-call? p)
-         (format nil "CALL (0x~x)" p))
-        (t (format nil "PTR 0x~x" p))))
+(defun node-label (p &optional (addr? t))
+  (let ((addr (if addr? (format nil " (0x~x)" p) "")))
+    (cond ((eq p *type-self-eval-ptr*)
+           "(nil)")
+          ((prim-atom? p)
+           (cond ((prim-car? p) "CAR")
+                 ((prim-cdr? p) "CDR")
+                 ((prim-rplaca? p) "RPLACA")
+                 ((prim-rplacd? p) "RPLACD")
+                 ((prim-cons? p) "CONS")
+                 ((prim-symbol? p) (format nil "SYMBOL~a = '~a'" addr (prim-symbol-name (prim-get-data p))))
+                 (t (format nil "INT ~a" (prim-get-data p)))))
+          ((prim-if? p)
+           (format nil "IF~a" addr))
+          ((prim-lambda? p)
+           (format nil "LAMBDA~a" addr))
+          ((prim-call? p)
+           (format nil "CALL~a" addr))
+          (t (format nil "PTR~a" addr)))))
 
 (defun node->dot (p)
   (if (prim-atom? p)
@@ -369,15 +370,16 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                       :error :output))
 
 
-(defun spprint-node (p prefix indent)
-  (format t "~a~a~a~%" indent prefix (node-label p))
-  (if (prim-list? p)
-    (let ((nextindent (concatenate 'string indent "  ")))
-      (spprint-node (prim-car p) "A:" nextindent)
-      (spprint-node (prim-cdr p) "D:" nextindent))))
+(defun spprint-node (p)
+  (let ((self (format nil "~a" (node-label p nil))))
+    (if (prim-atom? p)
+      self
+      `(,self (,(spprint-node (prim-car p))
+                ,(spprint-node (prim-cdr p)))))))
 
-(defun spprint (p)
+(defun spprint (p &optional (output-stream nil))
   "convert simple machine expr into (sorta) readable string. for debugging and unit tests."
-  (spprint-node p "" ""))
-
-(spprint (scompile '(1 2 3)))
+  (if output-stream
+    (pprint (spprint-node p) output-stream)
+    (spprint-node p)))
+  
