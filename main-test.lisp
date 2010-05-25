@@ -35,10 +35,10 @@
          ("PTR" ("INT 444" "(nil)"))))))
     (spprint (scompile '(if 1 (if 0 99 88) 444))))
   (assert-equal
-    '("CALL" ("INT 1" ("PTR" ("INT 2" ("PTR" ("INT 3" "(nil)"))))))
+    '("CALL" ("INT 2" ("PTR" ("INT 3" "INT 1"))))
     (spprint (scompile '(1 2 3))))
   (assert-equal
-    '("CALL" ("CONS" ("PTR" ("INT 3" ("PTR" ("INT 4" "(nil)"))))))
+    '("CALL" ("INT 3" ("PTR" ("INT 4" "CONS"))))
     (spprint (scompile '(cons 3 4))))
   (assert-equal
     "SYMBOL = 'X'"
@@ -47,25 +47,25 @@
     "SYMBOL = 'BLORP'"
     (spprint (scompile 'blORp)))
   (assert-equal
-    '("CALL" ("CAR" ("PTR" ("SYMBOL = 'STUFF'" "(nil)"))))
+    '("CALL" ("SYMBOL = 'STUFF'" "CAR"))
     (spprint (scompile '(car stuff))))
   (assert-equal
-    '("CALL" ("CDR" ("PTR" ("SYMBOL = 'STUFF'" "(nil)"))))
+    '("CALL" ("SYMBOL = 'STUFF'" "CDR"))
     (spprint (scompile '(cdr stuff))))
   (assert-equal
     '("CALL"
-      ("CONS" ("PTR" ("SYMBOL = 'STUFF'" ("PTR" ("SYMBOL = 'THINGS'" "(nil)"))))))
+      ("SYMBOL = 'STUFF'" ("PTR" ("SYMBOL = 'THINGS'" "CONS"))))
     (spprint (scompile '(cons stuff things))))
   (assert-equal
     '("CALL"
-      ("RPLACA" ("PTR" ("SYMBOL = 'STUFF'" ("PTR" ("SYMBOL = 'THINGS'" "(nil)"))))))
+      ("SYMBOL = 'STUFF'" ("PTR" ("SYMBOL = 'THINGS'" "RPLACA"))))
     (spprint (scompile '(rplaca stuff things))))
   (assert-equal
     '("CALL"
-      ("RPLACD" ("PTR" ("SYMBOL = 'STUFF'" ("PTR" ("SYMBOL = 'THINGS'" "(nil)"))))))
+      ("SYMBOL = 'STUFF'" ("PTR" ("SYMBOL = 'THINGS'" "RPLACD"))))
     (spprint (scompile '(rplacd stuff things))))
   )
 
 
-
+(spprint (scompile '(1 2 3)))
 (run-tests)

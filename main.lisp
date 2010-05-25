@@ -47,12 +47,14 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defparameter *type-closure*         #b1101000000000000) ; closure when eval'd (which includes the env)
 
 (defparameter *type-self-eval-immed* #b0000000000000000)
-(defparameter *type-car*             #b0001000000000000)
-(defparameter *type-cdr*             #b0010000000000000)
-(defparameter *type-rplaca*          #b0011000000000000)
-(defparameter *type-rplacd*          #b0100000000000000)
-(defparameter *type-cons*            #b0101000000000000)
-(defparameter *type-symbol*          #b0110000000000000)
+(defparameter *type-primcall*        #b0001000000000000)
+(defparameter *type-car-call*        (logior *type-primcall* 1))
+(defparameter *type-cdr-call*        (logior *type-primcall* 2))
+(defparameter *type-rplaca-call*     (logior *type-primcall* 3))
+(defparameter *type-rplacd-call*     (logior *type-primcall* 4))
+(defparameter *type-cons-call*       (logior *type-primcall* 5))
+(defparameter *type-symbol*          #b0010000000000000)
+(defparameter *type-funcall*         #b0011000000000000)
 
 ; these need to have the high-bit set because they're or'd into
 ; tag bits on a cons cell stored in clink
@@ -72,16 +74,17 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
 (defun prim-list? (p) (and
                         (= (logand p *type-is-ptr-mask*) *type-is-ptr-mask*)
-                        (not (= p *type-self-eval-ptr*)))) ; nil
+                        (not (prim-null? p))))
+(defun prim-null? (p) (= p *type-self-eval-ptr*))
 (defun prim-atom? (p) (not (prim-list? p)))
 (defun prim-if? (p) (= (logand p *type-mask*) *type-if*))
 (defun prim-lambda? (p) (= (logand p *type-mask*) *type-lambda*))
 (defun prim-call? (p) (= (logand p *type-mask*) *type-call*))
-(defun prim-car? (p) (= (logand p *type-mask*) *type-car*))
-(defun prim-cdr? (p) (= (logand p *type-mask*) *type-cdr*))
-(defun prim-rplaca? (p) (= (logand p *type-mask*) *type-rplaca*))
-(defun prim-rplacd? (p) (= (logand p *type-mask*) *type-rplacd*))
-(defun prim-cons? (p) (= (logand p *type-mask*) *type-cons*))
+(defun prim-car-call? (p) (= p *type-car-call*))
+(defun prim-cdr-call? (p) (= p *type-cdr-call*))
+(defun prim-rplaca-call? (p) (= p *type-rplaca-call*))
+(defun prim-rplacd-call? (p) (= p *type-rplacd-call*))
+(defun prim-cons-call? (p) (= p *type-cons-call*))
 (defun prim-symbol? (p) (= (logand p *type-mask*) *type-symbol*))
 
 (defun prim-get-data (p) (logand p *data-mask*))
@@ -125,6 +128,9 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                (if (= v sym)
                  (return-from prim-symbol-name k)))
            *prim-intern-hash*))
+
+(defun prim-rplacd (kons obj)
+  (setf (elt *memory* (logand *data-mask* kons)) (logior (ash (prim-car kons) 16) obj)))
 
 ; relies on load order; prim-nil has to be address 0
 (defvar *prim-nil* (prim-cons 0 0))
@@ -177,6 +183,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
             ((= exptype *type-symbol*) (go :st-self))
             ((= exptype *type-if*) (go :st-if1))
             ((= exptype *type-lambda*) (go :st-lambda))
+            ;((= exptype *type-call*) (go :st-))
             (t (error "unhandled type in eval"))))
 
 
@@ -263,8 +270,18 @@ remaining 12 bits allow address of 4k cells == 16k bytes
     *type-self-eval-ptr*
     (prim-cons (car L) (list->prim-list (cdr L)))))
 
-(defun list->call (L)
-  (logior *type-call* (list->prim-list L)))
+(defun list->prim-call (L)
+  (labels ((rplacd-last-as-call-func (prim-L func)
+                                     (if (prim-null? (prim-cdr prim-L))
+                                       (prim-rplacd prim-L func)
+                                       (rplacd-last-as-call-func (prim-cdr prim-L) func))
+                                     prim-L))
+    (let* ((args (cdr L))
+           (func (car L)))
+      (rplacd-last-as-call-func (logior *type-call* (list->prim-list args))
+                                func))))
+
+;(sdot-and-view (list->prim-call `(,*type-car-call* ,(scompile 1) ,(scompile 'a))))
 
 (defun scompile (exp)
   "Convert regular lisp expression to simple expression to be evaluated by
@@ -278,22 +295,22 @@ remaining 12 bits allow address of 4k cells == 16k bytes
            (logior *type-symbol* (prim-intern exp)))
           (t (error "unhandled case")))
     (cond ((eq (car exp) 'if) (logior *type-if* (list->prim-list (mapcar #'scompile (cdr exp)))))
-          ((eq (car exp) 'car) (list->call `(,*type-car* ,(scompile (cadr exp)))))
-          ((eq (car exp) 'cdr) (list->call `(,*type-cdr* ,(scompile (cadr exp)))))
-          ((eq (car exp) 'rplaca) (list->call `(,*type-rplaca*
+          ((eq (car exp) 'car) (list->prim-call `(,*type-car-call* ,(scompile (cadr exp)))))
+          ((eq (car exp) 'cdr) (list->prim-call `(,*type-cdr-call* ,(scompile (cadr exp)))))
+          ((eq (car exp) 'rplaca) (list->prim-call `(,*type-rplaca-call*
                                                  ,(scompile (cadr exp))
                                                  ,(scompile (caddr exp)))))
-          ((eq (car exp) 'rplacd) (list->call `(,*type-rplacd*
+          ((eq (car exp) 'rplacd) (list->prim-call `(,*type-rplacd-call*
                                                  ,(scompile (cadr exp))
                                                  ,(scompile (caddr exp)))))
-          ((eq (car exp) 'cons) (list->call `(,*type-cons*
+          ((eq (car exp) 'cons) (list->prim-call `(,*type-cons-call*
                                                     ,(scompile (cadr exp))
                                                     ,(scompile (caddr exp)))))
           ((eq (car exp) 'quote) (list->prim-list (mapcar #'scompile (cadr exp))))
           ((eq (car exp) 'lambda) (logior *type-lambda*
                                           (prim-cons (list->prim-list (mapcar #'scompile (cadr exp)))
                                                      (scompile (caddr exp)))))
-          (t (list->call (mapcar #'scompile exp))))))
+          (t (list->prim-call (mapcar #'scompile exp))))))
 
 ;(sdot-and-view (scompile 99))
 ;(sdot-and-view (scompile '(if 1 2 3)))
@@ -302,7 +319,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
 ;(sdot-and-view (scompile '(cons 3 4)))
 
-(sdot-and-view (scompile '(1 2 3)))
+;(sdot-and-view (scompile '(1 2 3)))
 
 (defun get-attached-nodes (p &optional ret)
   (if (prim-list? p)
@@ -315,11 +332,11 @@ remaining 12 bits allow address of 4k cells == 16k bytes
     (cond ((eq p *type-self-eval-ptr*)
            "(nil)")
           ((prim-atom? p)
-           (cond ((prim-car? p) "CAR")
-                 ((prim-cdr? p) "CDR")
-                 ((prim-rplaca? p) "RPLACA")
-                 ((prim-rplacd? p) "RPLACD")
-                 ((prim-cons? p) "CONS")
+           (cond ((prim-car-call? p) "CAR")
+                 ((prim-cdr-call? p) "CDR")
+                 ((prim-rplaca-call? p) "RPLACA")
+                 ((prim-rplacd-call? p) "RPLACD")
+                 ((prim-cons-call? p) "CONS")
                  ((prim-symbol? p) (format nil "SYMBOL~a = '~a'" addr (prim-symbol-name (prim-get-data p))))
                  (t (format nil "INT ~a" (prim-get-data p)))))
           ((prim-if? p)
