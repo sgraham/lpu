@@ -35,7 +35,7 @@
          ("PTR" ("INT 444" "(nil)"))))))
     (spprint (scompile '(if 1 (if 0 99 88) 444))))
   (assert-equal
-    '("CALL" ("INT 2" ("PTR" ("INT 3" "INT 1"))))
+    '("CALL" ("INT 2" ("PTR" ("INT 3" ("PTR" ("INT 1" "FUNCALL"))))))
     (spprint (scompile '(1 2 3))))
   (assert-equal
     '("CALL" ("INT 3" ("PTR" ("INT 4" "CONS"))))

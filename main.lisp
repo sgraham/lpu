@@ -53,8 +53,8 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defparameter *type-rplaca-call*     (logior *type-primcall* 3))
 (defparameter *type-rplacd-call*     (logior *type-primcall* 4))
 (defparameter *type-cons-call*       (logior *type-primcall* 5))
+(defparameter *type-fun-call*        (logior *type-primcall* 6))
 (defparameter *type-symbol*          #b0010000000000000)
-(defparameter *type-funcall*         #b0011000000000000)
 
 ; these need to have the high-bit set because they're or'd into
 ; tag bits on a cons cell stored in clink
@@ -85,6 +85,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defun prim-rplaca-call? (p) (= p *type-rplaca-call*))
 (defun prim-rplacd-call? (p) (= p *type-rplacd-call*))
 (defun prim-cons-call? (p) (= p *type-cons-call*))
+(defun prim-fun-call? (p) (= p *type-fun-call*))
 (defun prim-symbol? (p) (= (logand p *type-mask*) *type-symbol*))
 
 (defun prim-get-data (p) (logand p *data-mask*))
@@ -310,7 +311,9 @@ remaining 12 bits allow address of 4k cells == 16k bytes
           ((eq (car exp) 'lambda) (logior *type-lambda*
                                           (prim-cons (list->prim-list (mapcar #'scompile (cadr exp)))
                                                      (scompile (caddr exp)))))
-          (t (list->prim-call (mapcar #'scompile exp))))))
+          (t (list->prim-call `(,*type-fun-call*
+                                 ,@(mapcar #'scompile (cdr exp))
+                                 ,(scompile (car exp))))))))
 
 ;(sdot-and-view (scompile 99))
 ;(sdot-and-view (scompile '(if 1 2 3)))
@@ -319,7 +322,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
 ;(sdot-and-view (scompile '(cons 3 4)))
 
-;(sdot-and-view (scompile '(1 2 3)))
+;(sdot-and-view (scompile '(a 2 3)))
 
 (defun get-attached-nodes (p &optional ret)
   (if (prim-list? p)
@@ -337,6 +340,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                  ((prim-rplaca-call? p) "RPLACA")
                  ((prim-rplacd-call? p) "RPLACD")
                  ((prim-cons-call? p) "CONS")
+                 ((prim-fun-call? p) "FUNCALL")
                  ((prim-symbol? p) (format nil "SYMBOL~a = '~a'" addr (prim-symbol-name (prim-get-data p))))
                  (t (format nil "INT ~a" (prim-get-data p)))))
           ((prim-if? p)
