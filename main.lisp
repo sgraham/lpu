@@ -55,6 +55,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defparameter *type-cons-call*       (logior *type-primcall* 5))
 (defparameter *type-fun-call*        (logior *type-primcall* 6))
 (defparameter *type-symbol*          #b0010000000000000)
+(defparameter *type-variable*        #b0011000000000000)
 
 ; these need to have the high-bit set because they're or'd into
 ; tag bits on a cons cell stored in clink
@@ -87,6 +88,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defun prim-cons-call? (p) (= p *type-cons-call*))
 (defun prim-fun-call? (p) (= p *type-fun-call*))
 (defun prim-symbol? (p) (= (logand p *type-mask*) *type-symbol*))
+(defun prim-variable? (p) (= (logand p *type-mask*) *type-variable*))
 
 (defun prim-get-data (p) (logand p *data-mask*))
 
@@ -353,7 +355,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
             ((= exptype *type-retloc-call-3*) (go :st-call-3))))
     ))
 
-(seval (scompile '((lambda () 444))))
+;(seval (scompile '((lambda () 444))))
 
 (defun seval (sexp)
   (setq *reg-exp* sexp)
@@ -365,11 +367,9 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   (run-machine)
   *reg-val*)
 
-(seval (scompile '((lambda () 1))))
+;(seval (scompile '((lambda () 1))))
 ;(seval (scompile '(a)))
-(seval (scompile '(car (cdr '(42 99)))))
-
-(sdot-and-view (scompile '(lambda () 4)))
+;(seval (scompile '(car (cdr '(42 99)))))
 
 (defun list->prim-list (L)
   (if (null L)
@@ -389,48 +389,51 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
 ;(sdot-and-view (list->prim-call `(,*type-car-call* ,(scompile 1) ,(scompile 'a))))
 
-(defun scompile (exp)
-  "Convert regular lisp expression to simple expression to be evaluated by
-  machine/seval"
-
+(defun scompile-inner (exp env)
   (if (atom exp)
     (cond ((typep exp 'fixnum)
            (logior *type-self-eval-immed* exp))
           ((null exp) *type-self-eval-ptr*)
           ((typep exp 'symbol)
-           (logior *type-symbol* (prim-intern exp)))
+           (let ((pos (position exp env)))
+             (if (null pos)
+               (logior *type-symbol* (prim-intern exp)) ; todo; probably don't want this other than :blah
+               (logior *type-variable* pos))))
           (t (error "unhandled case")))
-    (cond ((eq (car exp) 'if) (logior *type-if* (list->prim-list (mapcar #'scompile (cdr exp)))))
-          ((eq (car exp) 'car) (list->prim-call `(,*type-car-call* ,(scompile (cadr exp)))))
-          ((eq (car exp) 'cdr) (list->prim-call `(,*type-cdr-call* ,(scompile (cadr exp)))))
+    (cond ((eq (car exp) 'if) (logior *type-if* (list->prim-list (mapcar #'(lambda (x) (scompile-inner x env)) (cdr exp)))))
+          ((eq (car exp) 'car) (list->prim-call `(,*type-car-call* ,(scompile-inner (cadr exp) env))))
+          ((eq (car exp) 'cdr) (list->prim-call `(,*type-cdr-call* ,(scompile-inner (cadr exp) env))))
           ((eq (car exp) 'rplaca) (list->prim-call `(,*type-rplaca-call*
-                                                      ,(scompile (cadr exp))
-                                                      ,(scompile (caddr exp)))))
+                                                      ,(scompile-inner (cadr exp) env)
+                                                      ,(scompile-inner (caddr exp) env))))
           ((eq (car exp) 'rplacd) (list->prim-call `(,*type-rplacd-call*
-                                                      ,(scompile (cadr exp))
-                                                      ,(scompile (caddr exp)))))
+                                                      ,(scompile-inner (cadr exp) env)
+                                                      ,(scompile-inner (caddr exp) env))))
           ((eq (car exp) 'cons) (list->prim-call `(,*type-cons-call*
-                                                    ,(scompile (cadr exp))
-                                                    ,(scompile (caddr exp)))))
-          ((eq (car exp) 'quote) (list->prim-list (mapcar #'scompile (cadr exp))))
+                                                    ,(scompile-inner (cadr exp) env)
+                                                    ,(scompile-inner (caddr exp) env))))
+          ((eq (car exp) 'quote) (list->prim-list (mapcar #'(lambda (x) (scompile-inner x env)) (cadr exp))))
           ((eq (car exp) 'lambda) (logior *type-lambda*
-                                          ; todo; argument names to be passed to subcompile for binding
-                                          ; (list->prim-list (mapcar #'scompile (cadr exp)))
-                                          (prim-cons (scompile (caddr exp)) ; body
-                                                     ; this is say, docstring, unused
-                                                               *prim-nil*)))
+                                          (prim-cons (scompile-inner (caddr exp) ; body
+                                                                     (concatenate 'list (cadr exp) env)) ; eval env
+                                                     ; this is say, docstring, or numargs or something
+                                                     *prim-nil*)))
           (t (list->prim-call `(,*type-fun-call*
-                                 ,@(mapcar #'scompile (cdr exp))
-                                 ,(scompile (car exp))))))))
+                                 ,@(mapcar #'(lambda (x) (scompile-inner x env)) (cdr exp))
+                                 ,(scompile-inner (car exp) env)))))))
 
+(defun scompile (exp)
+  "Convert regular lisp expression to simple expression to be evaluated by
+  machine/seval"
+  (scompile-inner exp nil))
+
+;(sdot-and-view (scompile '(lambda (a) a)))
 ;(sdot-and-view (scompile 99))
 ;(sdot-and-view (scompile '(if 1 2 3)))
 ;(sdot-and-view (scompile '(if 1 2)))
 ;(sdot-and-view (scompile '(88 9 4 8)))
 
-;(sdot-and-view (scompile '(cons 3 4)))
-
-;(sdot-and-view (scompile '(a 2 3)))
+;(sdot-and-view (scompile '(lambda (a b) (if a 4 b))))
 
 (defun get-attached-nodes (p &optional ret)
   (if (prim-list? p)
@@ -449,6 +452,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                  ((prim-rplacd-call? p) "RPLACD")
                  ((prim-cons-call? p) "CONS")
                  ((prim-fun-call? p) "FUNCALL")
+                 ((prim-variable? p) (format nil "VARIABLE @ ~a" (prim-get-data p)))
                  ((prim-symbol? p) (format nil "SYMBOL~a = '~a'" addr (prim-symbol-name (prim-get-data p))))
                  (t (format nil "INT ~a" (prim-get-data p)))))
           ((prim-if? p)

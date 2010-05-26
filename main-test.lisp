@@ -64,6 +64,18 @@
     '("CALL"
       ("SYMBOL = 'STUFF'" ("PTR" ("SYMBOL = 'THINGS'" "RPLACD"))))
     (spprint (scompile '(rplacd stuff things))))
+  (assert-equal
+    '("LAMBDA" ("VARIABLE @ 0" "(nil)"))
+    (spprint (scompile '(lambda (a) a))))
+  (assert-equal
+    '("LAMBDA" ("VARIABLE @ 1" "(nil)"))
+    (spprint (scompile '(lambda (a b) b))))
+  (assert-equal
+    '("LAMBDA"
+         (("IF"
+           ("VARIABLE @ 0" ("PTR" ("INT 4" ("PTR" ("VARIABLE @ 1" "(nil)"))))))
+          "(nil)"))
+    (spprint (scompile '(lambda (a b) (if a 4 b)))))
   )
 
 
@@ -84,6 +96,7 @@
     999
     (seval (scompile '(car (cdr (cons 555 (cons 999 nil)))))))
   )
+
 
 (define-test eval-with-funcall
   (assert-equal
