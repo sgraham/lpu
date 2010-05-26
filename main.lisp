@@ -59,7 +59,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 ; these need to have the high-bit set because they're or'd into
 ; tag bits on a cons cell stored in clink
 (defparameter *type-retloc-if2*      #b1001000000000000)
-(defparameter *type-retloc-evcomb3*  #b1010000000000000)
+(defparameter *type-retloc-call-3*   #b1010000000000000)
 
 (defparameter *type-mask*            #b1111000000000000)
 (defparameter *data-mask*            #b0000111111111111)
@@ -184,7 +184,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
             ((= exptype *type-symbol*) (go :st-self))
             ((= exptype *type-if*) (go :st-if1))
             ((= exptype *type-lambda*) (go :st-lambda))
-            ;((= exptype *type-call*) (go :st-))
+            ((= exptype *type-call*) (go :st-call))
             (t (error "unhandled type in eval"))))
 
 
@@ -241,14 +241,97 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
 
     ; ------------------------------------------
-    :st-evcomb3 (STATE-DEBUG evcomb3)
+    :st-call (STATE-DEBUG call)
+    ; initially, exp is the call expression that we want to evaluate. we want
+    ; to build up the args register evaluating each of the arguments in turn.
+    ; start by setting args to nil (the tail of the list)
+    (setq *reg-args* *prim-nil*)
+    (go :st-call-1) ; fall through
+
+
+    ; ------------------------------------------
+    :st-call-1 (STATE-DEBUG call-1)
+    (let ((exptype (logand *type-mask* *reg-exp*)))
+      (cond ((= exptype *type-primcall*)
+             (cond
+               ((= *reg-exp* *type-car-call*) (go :st-car))
+               ((= *reg-exp* *type-cdr-call*) (go :st-cdr))
+               ((= *reg-exp* *type-cons-call*) (go :st-cons))
+               ((= *reg-exp* *type-rplaca-call*) (go :st-rplaca))
+               ((= *reg-exp* *type-rplacd-call*) (go :st-rplacd))))
+            ((= exptype *type-call*) (go :st-call-2))
+            ((= exptype *type-fun-call*) (go :st-fun-call))))
+
+
+    ; ------------------------------------------
+    :st-call-2 (STATE-DEBUG call-2)
+    ; save the current environment, the current arguments
+    ; that we've built up, and the next thing we're going
+    ; to evaluate (using val as a temp).
+    (setq *reg-clink* (prim-cons *reg-env* *reg-clink*))
+    (setq *reg-clink* (prim-cons *reg-args* *reg-clink*))
+    (setq *reg-val* (prim-cdr *reg-exp*))
+    (setq *reg-clink* (logior *type-retloc-call-3* (prim-cons *reg-val* *reg-clink*)))
+
+    ; then, set the thing to be evaluated to the argument
+    ; we're working on and recurse
+    (setq *reg-exp* (prim-car *reg-exp*))
+    (go :st-eval)
+
+
+    ; ------------------------------------------
+    :st-call-3 (STATE-DEBUG call-3)
+    ; when we're done evaluating the argument from above, we 'return' to here.
+    ; we pop the current position in the parameters, the arguments and the
+    ; environment off of the stack, add the just-evaluated result to args, and
+    ; continue down the list of arguments
+    (setq *reg-exp* (prim-car *reg-clink*))     ; pop remaining params (exp)
+    (setq *reg-clink* (prim-cdr *reg-clink*))
+    (setq *reg-args* (prim-car *reg-clink*))    ; pop saved earlier args
+    (setq *reg-clink* (prim-cdr *reg-clink*))
+    (setq *reg-env* (prim-car *reg-clink*))     ; pop saved environment
+    (setq *reg-clink* (prim-cdr *reg-clink*))
+
+    ; add the sub-evaluation to the list of args, and continue on
+    (setq *reg-args* (prim-cons *reg-val* *reg-args*))
+    (go :st-call-1)
+
+
+    ; ------------------------------------------
+    :st-car (STATE-DEBUG car)
+    (error "todo;")
+
+
+    ; ------------------------------------------
+    :st-cdr (STATE-DEBUG cdr)
+    (error "todo;")
+
+
+    ; ------------------------------------------
+    :st-cons (STATE-DEBUG cons)
+    (error "todo;")
+
+
+    ; ------------------------------------------
+    :st-rplaca (STATE-DEBUG rplaca)
+    (error "todo;")
+
+
+    ; ------------------------------------------
+    :st-rplacd (STATE-DEBUG rplacd)
+    (error "todo;")
+
+
+    ; ------------------------------------------
+    :st-fun-call (STATE-DEBUG fun-call)
+    (error "todo;")
 
 
     ; ------------------------------------------
     :st-return (STATE-DEBUG return)
     (let ((exptype (logand *type-mask* *reg-clink*)))
       (cond ((= exptype *type-retloc-if2*) (go :st-if2))
-            ((= exptype *type-retloc-evcomb3*) (go :st-evcomb3))))
+            ((= exptype *type-retloc-call-3*) (go :st-call-3))))
     ))
 
 (defun seval (sexp)
@@ -261,7 +344,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   (run-machine)
   *reg-val*)
 
-;(seval (scompile '((lambda () 1))))
+(seval (scompile '((lambda () 1))))
 ;(seval (scompile '(a)))
 
 ;(sdot-and-view (scompile '(lambda () 4)))
