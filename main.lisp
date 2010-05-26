@@ -299,17 +299,24 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
     ; ------------------------------------------
     :st-car (STATE-DEBUG car)
-    (error "todo;")
+    (setq *reg-val* (prim-car *reg-val*))
+    (go :st-return)
 
 
     ; ------------------------------------------
     :st-cdr (STATE-DEBUG cdr)
-    (error "todo;")
+    (setq *reg-val* (prim-cdr *reg-val*))
+    (go :st-return)
 
 
     ; ------------------------------------------
     :st-cons (STATE-DEBUG cons)
-    (error "todo;")
+    ; take cadr of args, and use the fact that we know the order of evaluation
+    ; so val is already car of original args.
+    (setq *reg-args* (prim-cdr *reg-args*))
+    (setq *reg-args* (prim-car *reg-args*))
+    (setq *reg-val* (prim-cons *reg-args* *reg-val*))
+    (go :st-return)
 
 
     ; ------------------------------------------
@@ -346,6 +353,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
 (seval (scompile '((lambda () 1))))
 ;(seval (scompile '(a)))
+(seval (scompile '(car (cdr '(42 99)))))
 
 ;(sdot-and-view (scompile '(lambda () 4)))
 
