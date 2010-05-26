@@ -165,14 +165,17 @@ remaining 12 bits allow address of 4k cells == 16k bytes
          (print-machine-state)))
      (if *machine-single-step*
        (progn
-         (princ "... ret to step")
+         (princ "... ret to step, 'g' for graph from exp, 'v' for graph from val")
          (force-output)
-         (read-line)))))
+         (let ((res (read-line)))
+           (if (equal res "g")
+             (sdot-and-view *reg-exp*)))))))
 
 
 (defun run-machine ()
   "implementation of the machine. written in an attempted 'hardware'y fashion
-  with no hidden host language control mechanisms"
+  with no hidden host language control mechanisms or storage (only the five
+  registers are used)"
 
   (tagbody
 
@@ -246,7 +249,8 @@ remaining 12 bits allow address of 4k cells == 16k bytes
     ; to build up the args register evaluating each of the arguments in turn.
     ; start by setting args to nil (the tail of the list)
     (setq *reg-args* *prim-nil*)
-    (go :st-call-1) ; fall through
+    
+    ;; fall through
 
 
     ; ------------------------------------------
@@ -258,9 +262,11 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                ((= *reg-exp* *type-cdr-call*) (go :st-cdr))
                ((= *reg-exp* *type-cons-call*) (go :st-cons))
                ((= *reg-exp* *type-rplaca-call*) (go :st-rplaca))
-               ((= *reg-exp* *type-rplacd-call*) (go :st-rplacd))))
-            ((= exptype *type-call*) (go :st-call-2))
-            ((= exptype *type-fun-call*) (go :st-fun-call))))
+               ((= *reg-exp* *type-rplacd-call*) (go :st-rplacd))
+               ((= *reg-exp* *type-fun-call*) (go :st-fun-call))))
+            ((= exptype *type-call*) (go :st-call-2))))
+
+    ;; fall through if evaluating next argument
 
 
     ; ------------------------------------------
@@ -331,7 +337,13 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
     ; ------------------------------------------
     :st-fun-call (STATE-DEBUG fun-call)
-    (error "todo;")
+    ; val is already car of args
+    (setq *reg-args* (prim-cdr *reg-args*))
+    ; car of closure
+    (setq *reg-exp* (prim-car *reg-val*))
+    (setq *reg-exp* (prim-car *reg-exp*))
+    (setq *reg-env* (prim-cons *reg-args* *reg-val*))
+    (go :st-eval)
 
 
     ; ------------------------------------------
@@ -340,6 +352,8 @@ remaining 12 bits allow address of 4k cells == 16k bytes
       (cond ((= exptype *type-retloc-if2*) (go :st-if2))
             ((= exptype *type-retloc-call-3*) (go :st-call-3))))
     ))
+
+(seval (scompile '((lambda () 444))))
 
 (defun seval (sexp)
   (setq *reg-exp* sexp)
@@ -355,7 +369,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 ;(seval (scompile '(a)))
 (seval (scompile '(car (cdr '(42 99)))))
 
-;(sdot-and-view (scompile '(lambda () 4)))
+(sdot-and-view (scompile '(lambda () 4)))
 
 (defun list->prim-list (L)
   (if (null L)
@@ -390,18 +404,21 @@ remaining 12 bits allow address of 4k cells == 16k bytes
           ((eq (car exp) 'car) (list->prim-call `(,*type-car-call* ,(scompile (cadr exp)))))
           ((eq (car exp) 'cdr) (list->prim-call `(,*type-cdr-call* ,(scompile (cadr exp)))))
           ((eq (car exp) 'rplaca) (list->prim-call `(,*type-rplaca-call*
-                                                 ,(scompile (cadr exp))
-                                                 ,(scompile (caddr exp)))))
+                                                      ,(scompile (cadr exp))
+                                                      ,(scompile (caddr exp)))))
           ((eq (car exp) 'rplacd) (list->prim-call `(,*type-rplacd-call*
-                                                 ,(scompile (cadr exp))
-                                                 ,(scompile (caddr exp)))))
+                                                      ,(scompile (cadr exp))
+                                                      ,(scompile (caddr exp)))))
           ((eq (car exp) 'cons) (list->prim-call `(,*type-cons-call*
                                                     ,(scompile (cadr exp))
                                                     ,(scompile (caddr exp)))))
           ((eq (car exp) 'quote) (list->prim-list (mapcar #'scompile (cadr exp))))
           ((eq (car exp) 'lambda) (logior *type-lambda*
-                                          (prim-cons (list->prim-list (mapcar #'scompile (cadr exp)))
-                                                     (scompile (caddr exp)))))
+                                          ; todo; argument names to be passed to subcompile for binding
+                                          ; (list->prim-list (mapcar #'scompile (cadr exp)))
+                                          (prim-cons (scompile (caddr exp)) ; body
+                                                     ; this is say, docstring, unused
+                                                               *prim-nil*)))
           (t (list->prim-call `(,*type-fun-call*
                                  ,@(mapcar #'scompile (cdr exp))
                                  ,(scompile (car exp))))))))

@@ -85,6 +85,13 @@
     (seval (scompile '(car (cdr (cons 555 (cons 999 nil)))))))
   )
 
+(define-test eval-with-funcall
+  (assert-equal
+    444
+    (seval (scompile '((lambda () 444)))))
+  )
+
+
 
 (spprint (scompile '(1 2 3)))
 (run-tests)
