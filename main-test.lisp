@@ -35,48 +35,85 @@
          ("PTR" ("INT 444" "(nil)"))))))
     (spprint (scompile '(if 1 (if 0 99 88) 444))))
   (assert-equal
-    '("CALL" ("INT 2" ("PTR" ("INT 3" ("PTR" ("INT 1" "FUNCALL"))))))
+    '("CALL" ("INT 3" ("PTR" ("INT 2" ("PTR" ("INT 1" "FUNCALL"))))))
     (spprint (scompile '(1 2 3))))
   (assert-equal
     '("CALL" ("INT 3" ("PTR" ("INT 4" "CONS"))))
     (spprint (scompile '(cons 3 4))))
   (assert-equal
     "SYMBOL = 'X'"
-    (spprint (scompile 'x)))
+    (spprint (scompile ':x)))
   (assert-equal
     "SYMBOL = 'BLORP'"
-    (spprint (scompile 'blORp)))
+    (spprint (scompile ':blORp)))
   (assert-equal
     '("CALL" ("SYMBOL = 'STUFF'" "CAR"))
-    (spprint (scompile '(car stuff))))
+    (spprint (scompile '(car :stuff))))
   (assert-equal
     '("CALL" ("SYMBOL = 'STUFF'" "CDR"))
-    (spprint (scompile '(cdr stuff))))
+    (spprint (scompile '(cdr :stuff))))
   (assert-equal
     '("CALL"
       ("SYMBOL = 'STUFF'" ("PTR" ("SYMBOL = 'THINGS'" "CONS"))))
-    (spprint (scompile '(cons stuff things))))
+    (spprint (scompile '(cons :stuff :things))))
   (assert-equal
     '("CALL"
       ("SYMBOL = 'STUFF'" ("PTR" ("SYMBOL = 'THINGS'" "RPLACA"))))
-    (spprint (scompile '(rplaca stuff things))))
+    (spprint (scompile '(rplaca :stuff :things))))
   (assert-equal
     '("CALL"
       ("SYMBOL = 'STUFF'" ("PTR" ("SYMBOL = 'THINGS'" "RPLACD"))))
-    (spprint (scompile '(rplacd stuff things))))
+    (spprint (scompile '(rplacd :stuff :things))))
   (assert-equal
-    '("LAMBDA" ("VARIABLE @ 0" "(nil)"))
+    '("LAMBDA" ("VARIABLE @ 0,0" "(nil)"))
     (spprint (scompile '(lambda (a) a))))
   (assert-equal
-    '("LAMBDA" ("VARIABLE @ 1" "(nil)"))
+    '("LAMBDA" ("VARIABLE @ 0,1" "(nil)"))
     (spprint (scompile '(lambda (a b) b))))
   (assert-equal
     '("LAMBDA"
          (("IF"
-           ("VARIABLE @ 0" ("PTR" ("INT 4" ("PTR" ("VARIABLE @ 1" "(nil)"))))))
+           ("VARIABLE @ 0,0" ("PTR" ("INT 4" ("PTR" ("VARIABLE @ 0,1" "(nil)"))))))
           "(nil)"))
     (spprint (scompile '(lambda (a b) (if a 4 b)))))
+
+  ; todo; actual quote tests, rather than :sym
   )
+
+(define-test variable-lookup
+  (assert-equal
+    (logior *type-variable* 0 0)
+    (make-variable-ref 'a '((a))))
+  (assert-equal
+    (logior *type-variable* 0 0)
+    (make-variable-ref 'a '((a b))))
+  (assert-equal
+    (logior *type-variable* 0 1)
+    (make-variable-ref 'b '((a b))))
+  (assert-equal
+    (logior *type-variable* 0 3)
+    (make-variable-ref 'd '((a b c d e))))
+  (assert-equal
+    (logior *type-variable* (ash 1 6) 1)
+    (make-variable-ref 'e '((a b c) (d e f))))
+  (assert-equal
+    (logior *type-variable* (ash 1 6) 0)
+    (make-variable-ref 'd '((a b c) (d e f))))
+  (assert-equal
+    (logior *type-variable* (ash 1 6) 2)
+    (make-variable-ref 'f '((a b c) (d e f))))
+  (assert-equal
+    (logior *type-variable* (ash 0 6) 0)
+    (make-variable-ref 'a '((a b c) (d e a))))
+  (assert-equal
+    (logior *type-variable* (ash 1 6) 2)
+    (make-variable-ref 'a '(() (d e a))))
+  ; todo; figure out conditions
+  ;(assert-error
+    ;'could-not-find-variable-in-environment
+    ;(make-variable-ref 'f '(() (d e a))))
+  )
+
 
 
 (define-test eval-call-prim-funcs
@@ -102,9 +139,28 @@
   (assert-equal
     444
     (seval (scompile '((lambda () 444)))))
+  (assert-equal
+    532
+    (seval (scompile '((lambda (a) a) 532))))
+  (assert-equal
+    532
+    (seval (scompile '((lambda (a b) a) 532 88))))
+  (assert-equal
+    88
+    (seval (scompile '((lambda (a b) b) 532 88))))
+  (assert-equal
+    532
+    (seval (scompile '((lambda (a b c) a) 532 88 46))))
+  (assert-equal
+    88
+    (seval (scompile '((lambda (a b c) b) 532 88 46))))
+  (assert-equal
+    46
+    (seval (scompile '((lambda (a b c) c) 532 88 46))))
+  (assert-equal
+    46
+    (seval (scompile '((lambda (a b c) c) 532 88 46 999)))) ; todo; should error i guess
   )
 
 
-
-(spprint (scompile '(1 2 3)))
 (run-tests)

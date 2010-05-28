@@ -80,6 +80,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defun prim-atom? (p) (not (prim-list? p)))
 (defun prim-if? (p) (= (logand p *type-mask*) *type-if*))
 (defun prim-lambda? (p) (= (logand p *type-mask*) *type-lambda*))
+(defun prim-closure? (p) (= (logand p *type-mask*) *type-closure*))
 (defun prim-call? (p) (= (logand p *type-mask*) *type-call*))
 (defun prim-car-call? (p) (= p *type-car-call*))
 (defun prim-cdr-call? (p) (= p *type-cdr-call*))
@@ -135,6 +136,12 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defun prim-rplacd (kons obj)
   (setf (elt *memory* (logand *data-mask* kons)) (logior (ash (prim-car kons) 16) obj)))
 
+(defun prim-sub (v take)
+  (let ((ret (- v take)))
+    (if (< ret 0)
+      (+ ret #x1000)
+      ret)))
+
 ; relies on load order; prim-nil has to be address 0
 (defvar *prim-nil* (prim-cons 0 0))
 (defvar *prim-t* (prim-cons 0 0))
@@ -187,6 +194,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
       (cond ((= exptype *type-self-eval-immed*) (go :st-self))
             ((= exptype *type-self-eval-ptr*) (go :st-self))
             ((= exptype *type-symbol*) (go :st-self))
+            ((= exptype *type-variable*) (go :st-variable))
             ((= exptype *type-if*) (go :st-if1))
             ((= exptype *type-lambda*) (go :st-lambda))
             ((= exptype *type-call*) (go :st-call))
@@ -200,7 +208,48 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
 
     ; ------------------------------------------
+    :st-variable (STATE-DEBUG variable)
+    (setq *reg-val* *reg-env*) ; set env to val for walking
+    (go :st-walk-chain-to-bucket)
+
+
+    ; ------------------------------------------
+    :st-walk-chain-to-bucket (STATE-DEBUG walk-chain-to-bucket)
+    ; walk along the spine of the environment to find the right frame, at
+    ; each step, decrementing the chain value in exp.
+    ; jump to find-variable-in-bucket once we count down
+    (if (= (logand #b111111000000 (prim-get-data *reg-exp*)) 0)
+      (progn
+        (setq *reg-val* (prim-car *reg-val*))
+        (go :st-find-variable-in-bucket))
+      (progn
+        (setq *reg-val* (prim-cdr *reg-val*))
+        (setq *reg-args* (logand #b000000111111 (prim-get-data *reg-exp*))) ; XXX TODO args used as temp. ok here?
+        (setq *reg-exp* (prim-sub (prim-get-data *reg-exp*) 64))
+        (setq *reg-exp* (logior *type-variable* *reg-exp* *reg-args*))
+        (go :st-walk-chain-to-bucket)))
+
+    ; ------------------------------------------
+    :st-find-variable-in-bucket (STATE-DEBUG find-variable-in-bucket)
+    ; now val is the list of variables in this bucket of the right frame
+    ; walk down to get the right index in that list. we know the chain
+    ; is always 0 if we get here, so no need to compare vs top bits.
+    (if (= (prim-get-data *reg-exp*) 0)
+      (progn
+        (setq *reg-val* (prim-car *reg-val*))
+        (go :st-return))
+      (progn
+        (setq *reg-val* (prim-cdr *reg-val*))
+        (setq *reg-exp* (prim-sub (prim-get-data *reg-exp*) 1))
+        (go :st-find-variable-in-bucket)))
+
+
+
+    ; ------------------------------------------
     :st-lambda (STATE-DEBUG lambda)
+    ;(print "lambda->closure")
+    ;(print (spprint *reg-exp*))
+    ;(print (spprint *reg-env*))
     (setq *reg-val* (logior *type-closure* (prim-cons *reg-exp* *reg-env*)))
     (go :st-return)
 
@@ -251,7 +300,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
     ; to build up the args register evaluating each of the arguments in turn.
     ; start by setting args to nil (the tail of the list)
     (setq *reg-args* *prim-nil*)
-    
+
     ;; fall through
 
 
@@ -339,11 +388,23 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
     ; ------------------------------------------
     :st-fun-call (STATE-DEBUG fun-call)
-    ; val is already car of args
+    ; args is all arguments to function, in reversed order
+    ; val is already car of args, based on order of evaluation
+    ; (which is the closure that we're calling)
+    ;
+    ; set args to the actual parameters to the function
     (setq *reg-args* (prim-cdr *reg-args*))
-    ; car of closure
+
+    ; car of closure is the original lambda
     (setq *reg-exp* (prim-car *reg-val*))
+
+    ; car of the lambda is the body of the function, which is what we
+    ; want to evaluate
     (setq *reg-exp* (prim-car *reg-exp*))
+
+    ; the cdr of the closure is the environment. we cons the new arguments
+    ; together with the closure's saved environment and store in env.
+    (setq *reg-val* (prim-cdr *reg-val*))
     (setq *reg-env* (prim-cons *reg-args* *reg-val*))
     (go :st-eval)
 
@@ -355,21 +416,20 @@ remaining 12 bits allow address of 4k cells == 16k bytes
             ((= exptype *type-retloc-call-3*) (go :st-call-3))))
     ))
 
-;(seval (scompile '((lambda () 444))))
-
 (defun seval (sexp)
   (setq *reg-exp* sexp)
-  (setq *reg-val* 0)
-  (setq *reg-env* 0)
-  (setq *reg-args* 0)
-  (setq *reg-clink* 0)
+  (setq *reg-val* *prim-nil*)
+  (setq *reg-env* (prim-cons (logior *type-symbol* (prim-intern 'END-OF-ENV)) *prim-nil*))
+  (setq *reg-args* *prim-nil*)
+  (setq *reg-clink* *prim-nil*)
   ;(sdot-and-view sexp)
   (run-machine)
   *reg-val*)
 
-;(seval (scompile '((lambda () 1))))
-;(seval (scompile '(a)))
-;(seval (scompile '(car (cdr '(42 99)))))
+;(seval (scompile '((lambda (a) a) 8 9 10)))
+
+;(sdot-and-view (scompile '((lambda (a b) a) 8 9)))
+
 
 (defun list->prim-list (L)
   (if (null L)
@@ -389,16 +449,31 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
 ;(sdot-and-view (list->prim-call `(,*type-car-call* ,(scompile 1) ,(scompile 'a))))
 
+
+; todo; make sure chain and pos fit in bits
+
+(defun make-variable-ref-inner (var env chain)
+  (let ((pos (position var (car env))))
+    (if (null pos)
+      (if (null (cdr env))
+        (error 'could-not-find-variable-in-environment :var var)
+        (make-variable-ref-inner var (cdr env) (+ chain 1)))
+      (logior *type-variable* (ash chain 6) pos))))
+
+(defun make-variable-ref (var env)
+  (make-variable-ref-inner var env 0))
+      
+;(run-tests variable-lookup)
+
 (defun scompile-inner (exp env)
   (if (atom exp)
     (cond ((typep exp 'fixnum)
            (logior *type-self-eval-immed* exp))
           ((null exp) *type-self-eval-ptr*)
           ((typep exp 'symbol)
-           (let ((pos (position exp env)))
-             (if (null pos)
-               (logior *type-symbol* (prim-intern exp)) ; todo; probably don't want this other than :blah
-               (logior *type-variable* pos))))
+           (if (keywordp exp)
+             (logior *type-symbol* (prim-intern exp))
+             (make-variable-ref exp env)))
           (t (error "unhandled case")))
     (cond ((eq (car exp) 'if) (logior *type-if* (list->prim-list (mapcar #'(lambda (x) (scompile-inner x env)) (cdr exp)))))
           ((eq (car exp) 'car) (list->prim-call `(,*type-car-call* ,(scompile-inner (cadr exp) env))))
@@ -415,11 +490,11 @@ remaining 12 bits allow address of 4k cells == 16k bytes
           ((eq (car exp) 'quote) (list->prim-list (mapcar #'(lambda (x) (scompile-inner x env)) (cadr exp))))
           ((eq (car exp) 'lambda) (logior *type-lambda*
                                           (prim-cons (scompile-inner (caddr exp) ; body
-                                                                     (concatenate 'list (cadr exp) env)) ; eval env
+                                                                     (cons (cadr exp) env)) ; eval env
                                                      ; this is say, docstring, or numargs or something
                                                      *prim-nil*)))
           (t (list->prim-call `(,*type-fun-call*
-                                 ,@(mapcar #'(lambda (x) (scompile-inner x env)) (cdr exp))
+                                 ,@(reverse (mapcar #'(lambda (x) (scompile-inner x env)) (cdr exp)))
                                  ,(scompile-inner (car exp) env)))))))
 
 (defun scompile (exp)
@@ -427,13 +502,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   machine/seval"
   (scompile-inner exp nil))
 
-;(sdot-and-view (scompile '(lambda (a) a)))
-;(sdot-and-view (scompile 99))
-;(sdot-and-view (scompile '(if 1 2 3)))
-;(sdot-and-view (scompile '(if 1 2)))
-;(sdot-and-view (scompile '(88 9 4 8)))
-
-;(sdot-and-view (scompile '(lambda (a b) (if a 4 b))))
+;(sdot-and-view (scompile '((lambda (a) a) 532)))
 
 (defun get-attached-nodes (p &optional ret)
   (if (prim-list? p)
@@ -452,13 +521,17 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                  ((prim-rplacd-call? p) "RPLACD")
                  ((prim-cons-call? p) "CONS")
                  ((prim-fun-call? p) "FUNCALL")
-                 ((prim-variable? p) (format nil "VARIABLE @ ~a" (prim-get-data p)))
+                 ((prim-variable? p) (format nil "VARIABLE @ ~a,~a" ; top six bits are where in chain, bottom 6 are index in bucket
+                                             (ash (prim-get-data p) -6)
+                                             (logand (prim-get-data p) #b111111)))
                  ((prim-symbol? p) (format nil "SYMBOL~a = '~a'" addr (prim-symbol-name (prim-get-data p))))
                  (t (format nil "INT ~a" (prim-get-data p)))))
           ((prim-if? p)
            (format nil "IF~a" addr))
           ((prim-lambda? p)
            (format nil "LAMBDA~a" addr))
+          ((prim-closure? p)
+           (format nil "CLOSURE~a" addr))
           ((prim-call? p)
            (format nil "CALL~a" addr))
           (t (format nil "PTR~a" addr)))))
