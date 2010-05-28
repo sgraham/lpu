@@ -132,8 +132,27 @@
   (assert-equal
     999
     (seval (scompile '(car (cdr (cons 555 (cons 999 nil)))))))
+  (assert-equal
+    999
+    (seval (scompile '(car
+                        ((lambda (a) a)
+                         (cons 999 998))))))
+  (assert-equal
+    998
+    (seval (scompile '(cdr
+                        ((lambda (a) a)
+                         (cons 999 998))))))
+  (assert-equal
+    75
+    (seval (scompile '(car
+                        ((lambda (a) (rplaca a 75))
+                         (cons 999 998))))))
+  (assert-equal
+    74
+    (seval (scompile '(cdr
+                        ((lambda (a) (rplacd a 74))
+                         (cons 999 998))))))
   )
-
 
 (define-test eval-with-funcall
   (assert-equal
@@ -159,7 +178,15 @@
     (seval (scompile '((lambda (a b c) c) 532 88 46))))
   (assert-equal
     46
-    (seval (scompile '((lambda (a b c) c) 532 88 46 999)))) ; todo; should error i guess
+    (seval (scompile '((lambda (a b c) c) 532 88 46 999)))) ; todo; too many should error i guess
+  (assert-equal
+    532
+    (seval (scompile '((lambda (a b c) a) 532 88)))) ; todo; too few should error i guess
+  (assert-equal
+    999
+    (seval (scompile '((lambda (a)
+                         a)
+                       (car (cons 999 998))))))
   )
 
 

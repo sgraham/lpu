@@ -112,6 +112,8 @@ remaining 12 bits allow address of 4k cells == 16k bytes
     *cdr-mask*))
 
 (defun prim-cons (kar kdr)
+  (if (>= *reg-alloc* 4096)
+    (error 'out-of-memory))
   (let ((loc *reg-alloc*))
     (setf (elt *memory* loc) (logior (ash kar 16) kdr))
     (incf *reg-alloc*)
@@ -132,6 +134,9 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                (if (= v sym)
                  (return-from prim-symbol-name k)))
            *prim-intern-hash*))
+
+(defun prim-rplaca (kons obj)
+  (setf (elt *memory* (logand *data-mask* kons)) (logior (ash obj 16) (prim-cdr kons))))
 
 (defun prim-rplacd (kons obj)
   (setf (elt *memory* (logand *data-mask* kons)) (logior (ash (prim-car kons) 16) obj)))
@@ -378,12 +383,24 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
     ; ------------------------------------------
     :st-rplaca (STATE-DEBUG rplaca)
-    (error "todo;")
+    ; same logic as cons, but rplaca
+    (setq *reg-args* (prim-cdr *reg-args*))
+    (setq *reg-args* (prim-car *reg-args*))
+    (prim-rplaca *reg-args* *reg-val*)
+    ; and set the evaluated value to the object we stomped
+    (setq *reg-val* *reg-args*)
+    (go :st-return)
 
 
     ; ------------------------------------------
     :st-rplacd (STATE-DEBUG rplacd)
-    (error "todo;")
+    ; same logic as cons, but rplacd
+    (setq *reg-args* (prim-cdr *reg-args*))
+    (setq *reg-args* (prim-car *reg-args*))
+    (prim-rplacd *reg-args* *reg-val*)
+    ; and set the evaluated value to the object we stomped
+    (setq *reg-val* *reg-args*)
+    (go :st-return)
 
 
     ; ------------------------------------------
