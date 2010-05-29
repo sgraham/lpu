@@ -1,5 +1,6 @@
 (load "main.lisp")
 (load "compile.lisp")
+(load "gc.lisp")
 
 ; we know these warnings aren't a problem, so to avoid changing the code
 ; as distributed, just muffle the warning spam

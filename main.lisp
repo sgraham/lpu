@@ -13,7 +13,7 @@ probably need some more for gc to be written in code
 cons-in-other-space, rplaca-in-other-space, etc.
 plus flip space
 
-perhaps use data bits in primitives to indicate other half-space?
+perhaps use data bits in primitives to indicate other halfspace?
 hmm, wait. all those primitive functions can be one type that
 dispatch on more bits in data so we dont' have to try to cram into
 the 3 bits?
@@ -36,7 +36,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
 |#
 
-(declaim (optimize (safety 3)) (optimize (debug 3)) (optimize (speed 0)))
+;(declaim (optimize (safety 3)) (optimize (debug 3)) (optimize (speed 0)))
 
 (defparameter *type-is-ptr-mask*     #b1000000000000000)
 
@@ -56,6 +56,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defparameter *type-fun-call*        (logior *type-primcall* 6))
 (defparameter *type-symbol*          #b0010000000000000)
 (defparameter *type-variable*        #b0011000000000000)
+(defparameter *type-broken-heart*    #b0100000000000000) ; todo; this is sort of a pointer, but not really as it has no actual type
 
 ; these need to have the high-bit set because they're or'd into
 ; tag bits on a cons cell stored in clink
@@ -70,8 +71,14 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defparameter *car-mask*             #xffff0000)
 
 
+; the current allocation pointer
 (defvar *reg-alloc* 0)
-(defvar *memory* (make-array 4096))
+
+; memory, split into two halfspaces
+(defvar *reg-cur-halfspace* 0) ; only 1 bit
+(defvar *memory* (make-array 2))
+(setf (elt *memory* 0) (make-array 4096))
+(setf (elt *memory* 1) (make-array 4096))
 
 (defun prim-null? (p) (= p *type-self-eval-ptr*))
 (defun prim-list? (p) (and
@@ -90,6 +97,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defun prim-fun-call? (p) (= p *type-fun-call*))
 (defun prim-symbol? (p) (= (logand p *type-mask*) *type-symbol*))
 (defun prim-variable? (p) (= (logand p *type-mask*) *type-variable*))
+(defun prim-broken-heart? (p) (= (logand p *type-mask*) *type-broken-heart*))
 
 (defun prim-get-data (p) (logand p *data-mask*))
 
@@ -97,7 +105,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   (assert (not (prim-atom? exp)))
   (ash
     (logand
-      (elt *memory* (logand exp *data-mask*))
+      (elt (elt *memory* *reg-cur-halfspace*) (logand exp *data-mask*))
       *car-mask*)
     -16))
 (defun prim-car-data (exp)
@@ -106,18 +114,18 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defun prim-cdr (exp)
   (assert (not (prim-atom? exp)))
   (logand
-    (elt *memory* (logand exp *data-mask*))
+    (elt (elt *memory* *reg-cur-halfspace*) (logand exp *data-mask*))
     *cdr-mask*))
 (defun prim-cdr-data (exp)
   (logand (prim-cdr exp) *data-mask*))
 
-(defun prim-cons (kar kdr)
+(defun prim-cons (kar kdr &key (other 0))
   (if (>= *reg-alloc* 4096)
-    (error 'out-of-memory))
+    (error 'out-of-memory)
   (let ((loc *reg-alloc*))
-    (setf (elt *memory* loc) (logior (ash kar 16) kdr))
+    (setf (elt (elt *memory* (logxor *reg-cur-halfspace* other)) loc) (logior (ash kar 16) kdr))
     (incf *reg-alloc*)
-    (logior *type-self-eval-ptr* loc)))
+    (logior *type-self-eval-ptr* loc))))
 
 
 (defparameter *prim-intern-hash* (make-hash-table :test #'equal))
@@ -135,11 +143,17 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                  (return-from prim-symbol-name k)))
            *prim-intern-hash*))
 
-(defun prim-rplaca (kons obj)
-  (setf (elt *memory* (logand *data-mask* kons)) (logior (ash obj 16) (prim-cdr kons))))
+(defun prim-rplaca (kons obj &key (other 0))
+  (setf (elt
+          (elt *memory* (logxor *reg-cur-halfspace* other))
+          (logand *data-mask* kons))
+        (logior (ash obj 16) (prim-cdr kons))))
 
-(defun prim-rplacd (kons obj)
-  (setf (elt *memory* (logand *data-mask* kons)) (logior (ash (prim-car kons) 16) obj)))
+(defun prim-rplacd (kons obj &key (other 0))
+  (setf (elt
+          (elt *memory* (logxor *reg-cur-halfspace* other))
+          (logand *data-mask* kons))
+        (logior (ash (prim-car kons) 16) obj)))
 
 (defun prim-sub (v take)
   (let ((ret (- v take)))
@@ -150,6 +164,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 ; relies on load order; prim-nil has to be address 0
 (defvar *prim-nil* (prim-cons 0 0))
 (defvar *prim-t* (prim-cons 0 0))
+(defvar *gc-func* (prim-cons 0 0)) ; replaced later with actual function
 
 (defun node-label (p &optional (addr? t))
   "get a sensible name for a node"
