@@ -36,8 +36,6 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
 |#
 
-;(declaim (optimize (safety 3)) (optimize (debug 3)) (optimize (speed 0)))
-
 (defparameter *type-is-ptr-mask*     #b1000000000000000)
 
 (defparameter *type-self-eval-ptr*   #b1000000000000000)
@@ -70,15 +68,74 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defparameter *cdr-mask*             #x0000ffff)
 (defparameter *car-mask*             #xffff0000)
 
+;;;
+;;;
+;;; data for machine
+;;;
+;;;
+(defvar *prim-nil* #xbad)
+(defvar *prim-t* #xbad)
+
+; for debugging, to make sure we're tracking all references properly
+(defparameter *machine-gc-on-every-cons* nil)
 
 ; the current allocation pointer
 (defvar *reg-alloc* 0)
 
 ; memory, split into two halfspaces
 (defvar *reg-cur-halfspace* 0) ; only 1 bit
-(defvar *memory* (make-array 2))
-(setf (elt *memory* 0) (make-array 4096))
-(setf (elt *memory* 1) (make-array 4096))
+(defvar *memory* nil)
+
+(defvar *reg-exp* 0)
+(defvar *reg-val* 0)
+(defvar *reg-env* 0)
+(defvar *reg-args* 0)
+(defvar *reg-clink* 0)
+
+(defun print-machine-state ()
+ (format t "~%    exp = 0x~x~%    val = 0x~x~%    env = 0x~x~%    args = 0x~x~%    clink = 0x~x~%"
+  *reg-exp*
+  *reg-val*
+  *reg-env*
+  *reg-args*
+  *reg-clink*))
+
+(defparameter *machine-logging* nil)
+(defparameter *machine-single-step* nil)
+
+
+(defun prim-cons (kar kdr &key (other 0))
+  ; if our debug flag is set, and we're not allocating in the other halfspace
+  ; (i.e. doing a collection, the trigger a collection here)
+  (if (and *machine-gc-on-every-cons* (= other 0))
+    (host-gc))
+  (if (>= *reg-alloc* 4096)
+    (progn
+      (assert (= other 0))
+      (host-gc)))
+  (let ((loc *reg-alloc*))
+    (setf (elt (elt *memory* (logxor *reg-cur-halfspace* other)) loc) (logior (ash kar 16) kdr))
+    (incf *reg-alloc*)
+    (logior *type-self-eval-ptr* loc)))
+
+
+(defun reset-machine ()
+  (setq *memory* (make-array 2))
+  (setf (elt *memory* 0) (make-array 4096))
+  (setf (elt *memory* 1) (make-array 4096))
+  (setq *reg-alloc* 0)
+  (setq *reg-cur-halfspace* 0)
+
+  ; must be in slot 0
+  (setq *prim-nil* (prim-cons 0 0))
+  (setq *prim-t* (prim-cons 0 0))
+
+  (setq *reg-exp* *prim-nil*)
+  (setq *reg-val* *prim-nil*)
+  (setq *reg-env* *prim-nil*)
+  (setq *reg-args* *prim-nil*)
+  (setq *reg-clink* *prim-nil*))
+(reset-machine)
 
 (defun prim-null? (p) (= p *type-self-eval-ptr*))
 (defun prim-list? (p) (and
@@ -101,31 +158,23 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
 (defun prim-get-data (p) (logand p *data-mask*))
 
-(defun prim-car (exp)
-  (assert (not (prim-atom? exp)))
+(defun prim-car (exp &key (other 0) (raw nil))
+  (assert (or raw (not (prim-atom? exp))))
   (ash
     (logand
-      (elt (elt *memory* *reg-cur-halfspace*) (logand exp *data-mask*))
+      (elt (elt *memory* (logxor *reg-cur-halfspace* other)) (logand exp *data-mask*))
       *car-mask*)
     -16))
 (defun prim-car-data (exp)
   (logand (prim-car exp) *data-mask*))
 
-(defun prim-cdr (exp)
-  (assert (not (prim-atom? exp)))
+(defun prim-cdr (exp &key (other 0) (raw nil))
+  (assert (or raw (not (prim-atom? exp))))
   (logand
-    (elt (elt *memory* *reg-cur-halfspace*) (logand exp *data-mask*))
+    (elt (elt *memory* (logxor *reg-cur-halfspace* other)) (logand exp *data-mask*))
     *cdr-mask*))
 (defun prim-cdr-data (exp)
   (logand (prim-cdr exp) *data-mask*))
-
-(defun prim-cons (kar kdr &key (other 0))
-  (if (>= *reg-alloc* 4096)
-    (error 'out-of-memory)
-  (let ((loc *reg-alloc*))
-    (setf (elt (elt *memory* (logxor *reg-cur-halfspace* other)) loc) (logior (ash kar 16) kdr))
-    (incf *reg-alloc*)
-    (logior *type-self-eval-ptr* loc))))
 
 
 (defparameter *prim-intern-hash* (make-hash-table :test #'equal))
@@ -147,24 +196,19 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   (setf (elt
           (elt *memory* (logxor *reg-cur-halfspace* other))
           (logand *data-mask* kons))
-        (logior (ash obj 16) (prim-cdr kons))))
+        (logior (ash obj 16) (prim-cdr kons :other other :raw t))))
 
 (defun prim-rplacd (kons obj &key (other 0))
   (setf (elt
           (elt *memory* (logxor *reg-cur-halfspace* other))
           (logand *data-mask* kons))
-        (logior (ash (prim-car kons) 16) obj)))
+        (logior (ash (prim-car kons :other other :raw t) 16) obj)))
 
 (defun prim-sub (v take)
   (let ((ret (- v take)))
     (if (< ret 0)
       (+ ret #x1000)
       ret)))
-
-; relies on load order; prim-nil has to be address 0
-(defvar *prim-nil* (prim-cons 0 0))
-(defvar *prim-t* (prim-cons 0 0))
-(defvar *gc-func* (prim-cons 0 0)) ; replaced later with actual function
 
 (defun node-label (p &optional (addr? t))
   "get a sensible name for a node"
@@ -242,9 +286,9 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defun sdot-and-view (sexp)
   "sdot and then run-program to generate and view png"
   (sdot sexp)
-  (sb-ext:run-program "/bin/sh" '("-c" "dot -Tpng tmp.dot -otmp.png && gnome-open tmp.png")
-                      :output t
-                      :error :output))
+  (run-program "/bin/sh" '("-c" "dot -Tpng tmp.dot -otmp.png && gnome-open tmp.png")
+               :output t
+               :error :output))
 
 ;;;
 ;;;
@@ -264,28 +308,6 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   (if output-stream
     (pprint (spprint-node p) output-stream)
     (spprint-node p)))
-
-;;;
-;;;
-;;; data for machine
-;;;
-;;;
-(defvar *reg-exp* 0)
-(defvar *reg-val* 0)
-(defvar *reg-env* 0)
-(defvar *reg-args* 0)
-(defvar *reg-clink* 0)
-
-(defun print-machine-state ()
- (format t "~%    exp = 0x~x~%    val = 0x~x~%    env = 0x~x~%    args = 0x~x~%    clink = 0x~x~%"
-  *reg-exp*
-  *reg-val*
-  *reg-env*
-  *reg-args*
-  *reg-clink*))
-
-(defparameter *machine-logging* nil)
-(defparameter *machine-single-step* nil)
 
 ;;;
 ;;;

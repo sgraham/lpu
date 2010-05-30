@@ -17,7 +17,8 @@
 (defvar *reg-scan* 0)
 
 (defun copy-to-new-halfspace (p)
-  (print p)
+  ;(print "c-t-n-h")
+  ;(print p)
   (if (prim-atom? p)
     ; if it's an atom don't do anything
     p
@@ -36,8 +37,8 @@
   roots are the 5 main machine registers, and memory slot 2, which points to
   the garbage collector code itself."
 
-  (setf *reg-scan* 0)
-  (setf *reg-alloc* 0)
+  (setf *reg-scan* 2)
+  (setf *reg-alloc* 2)
 
   (setf *reg-exp* (copy-to-new-halfspace *reg-exp*))
   (setf *reg-val* (copy-to-new-halfspace *reg-val*))
@@ -45,20 +46,29 @@
   (setf *reg-args* (copy-to-new-halfspace *reg-args*))
   (setf *reg-clink* (copy-to-new-halfspace *reg-clink*))
 
+  ;(print "GC")
+
   ;(handle-pointer 2)
   (tagbody
     :gc-next
 
-    (print "reg-scan")
-    (print *reg-scan*)
-    (print "reg-alloc")
-    (print *reg-alloc*)
+    ;(print "reg-scan")
+    ;(print *reg-scan*)
+    ;(print "reg-alloc")
+    ;(print *reg-alloc*)
 
     (if (= *reg-scan* *reg-alloc*)
       (go :gc-done))
 
-    (prim-rplaca *reg-scan* (copy-to-new-halfspace (prim-car *reg-scan*)) :other 1)
-    (prim-rplacd *reg-scan* (copy-to-new-halfspace (prim-cdr *reg-scan*)) :other 1)
+    (let ((carval (prim-car *reg-scan* :other 1 :raw t)))
+      (if (= (logand carval *type-is-ptr-mask*)
+             *type-is-ptr-mask*)
+        (prim-rplaca *reg-scan* (copy-to-new-halfspace carval) :other 1)))
+    (let ((cdrval (prim-cdr *reg-scan* :other 1 :raw t)))
+      (if (= (logand cdrval *type-is-ptr-mask*)
+             *type-is-ptr-mask*)
+        (prim-rplacd *reg-scan* (copy-to-new-halfspace cdrval) :other 1)))
+
     (incf *reg-scan*)
     (go :gc-next)
 
