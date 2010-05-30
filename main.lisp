@@ -296,18 +296,59 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 ;;; unit tests
 ;;;
 ;;;
-(defun spprint-node (p)
-  (let ((self (format nil "~a" (node-label p nil))))
-    (if (prim-atom? p)
+(defun spprint-node (p recname isrec visited)
+  (let* ((have-vis (gethash p visited))
+         (p-is-rec (gethash p isrec))
+         (self (if have-vis
+                 (format nil "#->~a" (write-to-string (gethash p recname)))
+                 (format nil "~a~a"
+                         (if p-is-rec
+                           (concatenate 'string "#" (write-to-string (gethash p recname)) "=")
+                           "")
+                         (node-label p nil)))))
+    (if (or (prim-atom? p) have-vis)
       self
-      `(,self (,(spprint-node (prim-car p))
-                ,(spprint-node (prim-cdr p)))))))
+      (progn
+        (setf (gethash p visited) t)
+        `(,self (,(spprint-node (prim-car p) recname isrec visited)
+                  ,(spprint-node (prim-cdr p) recname isrec visited)))))))
+
+(defvar *spprint-find-recursive-counter* 0)
+(defun spprint-find-recursive (p name isrec)
+  (let ((prev (gethash p name)))
+    (if prev
+      (setf (gethash p isrec) t)
+      (if (prim-list? p)
+        (progn
+          (setf (gethash p name) (incf *spprint-find-recursive-counter*))
+          (spprint-find-recursive (prim-car p) name isrec)
+          (spprint-find-recursive (prim-cdr p) name isrec))))))
+
+
+(defun printhash (hash)
+  (maphash #'(lambda (k v) (format t "~a => ~a~%" k v)) hash))
+
+(let* ((a (prim-cons *prim-nil* *prim-nil*))
+       (b (prim-cons a *prim-nil*))
+       (c (prim-cons b *prim-nil*))
+       (name (make-hash-table))
+       (isrec (make-hash-table)))
+  (prim-rplaca a c)
+  (setq *spprint-find-recursive-counter* 0)
+  (spprint-find-recursive c name isrec)
+  (printhash name)
+  (printhash isrec)
+  (print (spprint c)))
 
 (defun spprint (p &optional (output-stream nil))
   "convert simple machine expr into (sorta) readable string. for debugging and unit tests."
-  (if output-stream
-    (pprint (spprint-node p) output-stream)
-    (spprint-node p)))
+  (let ((recname (make-hash-table))
+        (isrec (make-hash-table)))
+    (setq *spprint-find-recursive-counter* 0)
+    (spprint-find-recursive p recname isrec)
+    (if output-stream
+      (pprint (spprint-node p recname isrec (make-hash-table)) output-stream)
+      (spprint-node p recname isrec (make-hash-table)))))
 
 ;;;
 ;;;
