@@ -324,7 +324,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
           (spprint-find-recursive (prim-car p) name isrec)
           (spprint-find-recursive (prim-cdr p) name isrec))))))
 
-
+#|
 (defun printhash (hash)
   (maphash #'(lambda (k v) (format t "~a => ~a~%" k v)) hash))
 
@@ -339,6 +339,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   (printhash name)
   (printhash isrec)
   (print (spprint c)))
+|#
 
 (defun spprint (p &optional (output-stream nil))
   "convert simple machine expr into (sorta) readable string. for debugging and unit tests."
