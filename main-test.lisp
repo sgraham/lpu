@@ -65,15 +65,15 @@
       ("SYMBOL = 'STUFF'" ("PTR" ("SYMBOL = 'THINGS'" "RPLACD"))))
     (spprint (scompile '(rplacd :stuff :things))))
   (assert-equal
-    '("LAMBDA" ("VARIABLE @ 0,0" "(nil)"))
+    '("LAMBDA" ("VARIABLE @ 0,1" "(nil)"))
     (spprint (scompile '(lambda (a) a))))
   (assert-equal
-    '("LAMBDA" ("VARIABLE @ 0,1" "(nil)"))
+    '("LAMBDA" ("VARIABLE @ 0,2" "(nil)"))
     (spprint (scompile '(lambda (a b) b))))
   (assert-equal
     '("LAMBDA"
          (("IF"
-           ("VARIABLE @ 0,0" ("PTR" ("INT 4" ("PTR" ("VARIABLE @ 0,1" "(nil)"))))))
+           ("VARIABLE @ 0,1" ("PTR" ("INT 4" ("PTR" ("VARIABLE @ 0,2" "(nil)"))))))
           "(nil)"))
     (spprint (scompile '(lambda (a b) (if a 4 b)))))
 
@@ -176,6 +176,24 @@
   (assert-equal
     1
     (seval (scompile '(srl #x800))))
+  (assert-equal
+    *prim-nil*
+    (seval (scompile '(zerop 3))))
+  (assert-equal
+    *prim-t*
+    (seval (scompile '(zerop 0))))
+  )
+
+(define-test eval-various-alu
+  (assert-equal
+    #xfff
+    (seval (scompile -1)))
+  (assert-equal
+    #xff9
+    (seval (scompile -7)))
+  (assert-equal
+    #xe89
+    (seval (scompile #xf00de89)))
   )
 
 (define-test eval-with-funcall
@@ -211,6 +229,55 @@
     (seval (scompile '((lambda (a)
                          a)
                        (car (cons 999 998))))))
+  (assert-equal
+    72
+    (seval (scompile '((lambda (a b-left total)
+                         (if (zerop b-left)
+                           total
+                           (self a (+ b-left #xfff) (+ total a))))
+                       8 9 0)
+                     )))
+  (assert-equal
+    ; twos complement multiply
+    #xfdd
+    (seval (scompile '((lambda (a b-left total)
+                         (if (zerop b-left)
+                           total
+                           (self a (+ b-left #xfff) (+ total a))))
+                       -5 7 0)
+                     )))
+  (assert-equal
+    ; mul wrapped in outer lambda to pass 0 initializer
+    54
+    (seval (scompile '((lambda (a b)
+                         ((lambda (x y-left total)
+                            (if (zerop y-left)
+                              total
+                              (self x (+ y-left #xfff) (+ total x))))
+                          a b 0))
+                       6 9))))
+  (assert-equal
+    ; as above, but as if it's a let, with natural mul call
+    72
+    (seval (scompile '((lambda (mul)
+                         (mul 9 8))
+                       (lambda (a b)
+                         ((lambda (x y-left total)
+                            (if (zerop y-left)
+                              total
+                              (self x (+ y-left #xfff) (+ total x))))
+                          a b 0))))))
+  (assert-equal
+    ; as above, shadowing bindings in inner mul, and using closed-over variables
+    132
+    (seval (scompile '((lambda (mul)
+                         (mul 12 11))
+                       (lambda (a b)
+                         ((lambda (b-left total)
+                            (if (zerop b-left)
+                              total
+                              (self (+ b-left #xfff) (+ total a))))
+                          b 0))))))
   )
 
 

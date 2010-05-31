@@ -63,10 +63,11 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defparameter *type-add-call*        (logior *type-primcall* 7))
 (defparameter *type-inc-call*        (logior *type-primcall* 8))
 (defparameter *type-and-call*        (logior *type-primcall* 9))
-(defparameter *type-ior-call*         (logior *type-primcall* 10))
+(defparameter *type-ior-call*        (logior *type-primcall* 10))
 (defparameter *type-xor-call*        (logior *type-primcall* 11))
 (defparameter *type-not-call*        (logior *type-primcall* 12))
 (defparameter *type-srl-call*        (logior *type-primcall* 13))
+(defparameter *type-zerop-call*      (logior *type-primcall* 14))
 (defparameter *type-symbol*          #b0010000000000000)
 (defparameter *type-variable*        #b0011000000000000)
 (defparameter *type-broken-heart*    #b0100000000000000) ; todo; this is sort of a pointer, but not really as it has no actual type
@@ -174,6 +175,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defun prim-xor-call? (p) (= p *type-xor-call*))
 (defun prim-not-call? (p) (= p *type-not-call*))
 (defun prim-srl-call? (p) (= p *type-srl-call*))
+(defun prim-zerop-call? (p) (= p *type-zerop-call*))
 (defun prim-symbol? (p) (= (logand p *type-mask*) *type-symbol*))
 (defun prim-variable? (p) (= (logand p *type-mask*) *type-variable*))
 (defun prim-broken-heart? (p) (= (logand p *type-mask*) *type-broken-heart*))
@@ -247,6 +249,10 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   "rotate 1 bit left"
   (logior (logand (ash v 1) #xfff)
           (ash (logand v #x800) -11)))
+(defun prim-zerop (v)
+  (if (= v 0)
+    *prim-t*
+    *prim-nil*))
 
 (defun node-label (p &optional (addr? t))
   "get a sensible name for a node"
@@ -267,6 +273,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                  ((prim-xor-call? p) "LXOR")
                  ((prim-not-call? p) "LNOT")
                  ((prim-srl-call? p) "SRL")
+                 ((prim-zerop-call? p) "ZEROP")
                  ((prim-variable? p) (format nil "VARIABLE @ ~a,~a" ; top six bits are where in chain, bottom 6 are index in bucket
                                              (ash (prim-get-data p) -6)
                                              (logand (prim-get-data p) #b111111)))
@@ -581,6 +588,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                       ((= *reg-exp* *type-xor-call*) (goto xor))
                       ((= *reg-exp* *type-not-call*) (goto not))
                       ((= *reg-exp* *type-srl-call*) (goto srl))
+                      ((= *reg-exp* *type-zerop-call*) (goto zerop))
                       ((= *reg-exp* *type-fun-call*) (goto fun-call))))
                    ((= exptype *type-call*) (goto call-2)))))
 
@@ -672,6 +680,9 @@ remaining 12 bits allow address of 4k cells == 16k bytes
     (state srl
            (setq *reg-val* (prim-srl *reg-val*))
            (goto return))
+    (state zerop
+           (setq *reg-val* (prim-zerop *reg-val*))
+           (goto return))
 
     ; ------------------------------------------
     (state rplaca
@@ -703,9 +714,12 @@ remaining 12 bits allow address of 4k cells == 16k bytes
            ;
            ; set args to the actual parameters to the function
            (setq *reg-args* (prim-cdr *reg-args*))
+           ; and add the 'self' parameter to the front of the args (the original closure)
+           (setq *reg-args* (prim-cons *reg-val* *reg-args*))
 
            ; car of closure is the original lambda
            (setq *reg-exp* (prim-car *reg-val*))
+
 
            ; car of the lambda is the body of the function, which is what we
            ; want to evaluate
@@ -782,7 +796,8 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                                     (cdr ,*type-cdr-call*)
                                     (inc ,*type-inc-call*)
                                     (lnot ,*type-not-call*)
-                                    (srl ,*type-srl-call*)))
+                                    (srl ,*type-srl-call*)
+                                    (zerop ,*type-zerop-call*)))
 (defparameter *two-arg-prim-funs* `((cons ,*type-cons-call*)
                                     (+ ,*type-add-call*)
                                     (land ,*type-and-call*)
@@ -793,7 +808,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defun scompile-inner (exp env)
   (if (atom exp)
     (cond ((typep exp 'fixnum)
-           (logior *type-self-eval-immed* exp))
+           (logior *type-self-eval-immed* (logand #xfff exp)))
           ((null exp) *type-self-eval-ptr*)
           ((typep exp 'symbol)
            (if (keywordp exp)
@@ -811,7 +826,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
           ((eq (car exp) 'quote) (list->prim-list (mapcar #'(lambda (x) (scompile-inner x env)) (cadr exp))))
           ((eq (car exp) 'lambda) (logior *type-lambda*
                                           (prim-cons (scompile-inner (caddr exp) ; body
-                                                                     (cons (cadr exp) env)) ; eval env
+                                                                     (cons (cons 'self (cadr exp)) env)) ; eval env
                                                      ; this is say, docstring, or numargs or something
                                                      *prim-nil*)))
           (t (list->prim-call `(,*type-fun-call*
