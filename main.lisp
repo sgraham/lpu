@@ -63,7 +63,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defparameter *type-add-call*        (logior *type-primcall* 7))
 (defparameter *type-inc-call*        (logior *type-primcall* 8))
 (defparameter *type-and-call*        (logior *type-primcall* 9))
-(defparameter *type-or-call*         (logior *type-primcall* 10))
+(defparameter *type-ior-call*         (logior *type-primcall* 10))
 (defparameter *type-xor-call*        (logior *type-primcall* 11))
 (defparameter *type-not-call*        (logior *type-primcall* 12))
 (defparameter *type-srl-call*        (logior *type-primcall* 13))
@@ -170,7 +170,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defun prim-add-call? (p) (= p *type-add-call*))
 (defun prim-inc-call? (p) (= p *type-inc-call*))
 (defun prim-and-call? (p) (= p *type-and-call*))
-(defun prim-or-call? (p) (= p *type-or-call*))
+(defun prim-ior-call? (p) (= p *type-ior-call*))
 (defun prim-xor-call? (p) (= p *type-xor-call*))
 (defun prim-not-call? (p) (= p *type-not-call*))
 (defun prim-srl-call? (p) (= p *type-srl-call*))
@@ -240,12 +240,12 @@ remaining 12 bits allow address of 4k cells == 16k bytes
       (- ret #x1000)
       ret)))
 (defun prim-and (v with) (logand v with))
-(defun prim-or (v with) (logior v with))
+(defun prim-ior (v with) (logior v with))
 (defun prim-xor (v with) (logxor v with))
-(defun prim-not (v) (lognot v))
+(defun prim-not (v) (logand (lognot v) #xfff))
 (defun prim-srl (v)
   "rotate 1 bit left"
-  (logior (ash v 1)
+  (logior (logand (ash v 1) #xfff)
           (ash (logand v #x800) -11)))
 
 (defun node-label (p &optional (addr? t))
@@ -260,12 +260,12 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                  ((prim-rplacd-call? p) "RPLACD")
                  ((prim-cons-call? p) "CONS")
                  ((prim-fun-call? p) "FUNCALL")
-                 ((prim-add-call? p) "ADD")
+                 ((prim-add-call? p) "+")
                  ((prim-inc-call? p) "INC")
-                 ((prim-and-call? p) "AND")
-                 ((prim-or-call? p) "OR")
-                 ((prim-xor-call? p) "XOR")
-                 ((prim-not-call? p) "NOT")
+                 ((prim-and-call? p) "LAND")
+                 ((prim-ior-call? p) "LIOR")
+                 ((prim-xor-call? p) "LXOR")
+                 ((prim-not-call? p) "LNOT")
                  ((prim-srl-call? p) "SRL")
                  ((prim-variable? p) (format nil "VARIABLE @ ~a,~a" ; top six bits are where in chain, bottom 6 are index in bucket
                                              (ash (prim-get-data p) -6)
@@ -574,6 +574,13 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                       ((= *reg-exp* *type-cons-call*) (goto cons))
                       ((= *reg-exp* *type-rplaca-call*) (goto rplaca))
                       ((= *reg-exp* *type-rplacd-call*) (goto rplacd))
+                      ((= *reg-exp* *type-add-call*) (goto add))
+                      ((= *reg-exp* *type-inc-call*) (goto inc))
+                      ((= *reg-exp* *type-and-call*) (goto and))
+                      ((= *reg-exp* *type-ior-call*) (goto ior))
+                      ((= *reg-exp* *type-xor-call*) (goto xor))
+                      ((= *reg-exp* *type-not-call*) (goto not))
+                      ((= *reg-exp* *type-srl-call*) (goto srl))
                       ((= *reg-exp* *type-fun-call*) (goto fun-call))))
                    ((= exptype *type-call*) (goto call-2)))))
 
@@ -635,6 +642,36 @@ remaining 12 bits allow address of 4k cells == 16k bytes
            (setq *reg-val* (prim-cons *reg-args* *reg-val*))
            (goto return))
 
+
+    (state add
+           (setq *reg-args* (prim-cdr *reg-args*))
+           (setq *reg-args* (prim-car *reg-args*))
+           (setq *reg-val* (prim-add *reg-args* *reg-val*))
+           (goto return))
+    (state inc
+           (setq *reg-val* (prim-inc *reg-val*))
+           (goto return))
+    (state and
+           (setq *reg-args* (prim-cdr *reg-args*))
+           (setq *reg-args* (prim-car *reg-args*))
+           (setq *reg-val* (prim-and *reg-args* *reg-val*))
+           (goto return))
+    (state ior
+           (setq *reg-args* (prim-cdr *reg-args*))
+           (setq *reg-args* (prim-car *reg-args*))
+           (setq *reg-val* (prim-ior *reg-args* *reg-val*))
+           (goto return))
+    (state xor
+           (setq *reg-args* (prim-cdr *reg-args*))
+           (setq *reg-args* (prim-car *reg-args*))
+           (setq *reg-val* (prim-xor *reg-args* *reg-val*))
+           (goto return))
+    (state not
+           (setq *reg-val* (prim-not *reg-val*))
+           (goto return))
+    (state srl
+           (setq *reg-val* (prim-srl *reg-val*))
+           (goto return))
 
     ; ------------------------------------------
     (state rplaca
@@ -741,6 +778,18 @@ remaining 12 bits allow address of 4k cells == 16k bytes
       
 ;(run-tests variable-lookup)
 
+(defparameter *one-arg-prim-funs* `((car ,*type-car-call*)
+                                    (cdr ,*type-cdr-call*)
+                                    (inc ,*type-inc-call*)
+                                    (lnot ,*type-not-call*)
+                                    (srl ,*type-srl-call*)))
+(defparameter *two-arg-prim-funs* `((cons ,*type-cons-call*)
+                                    (+ ,*type-add-call*)
+                                    (land ,*type-and-call*)
+                                    (lior ,*type-ior-call*)
+                                    (lxor ,*type-xor-call*)
+                                    (rplaca ,*type-rplaca-call*)
+                                    (rplacd ,*type-rplacd-call*)))
 (defun scompile-inner (exp env)
   (if (atom exp)
     (cond ((typep exp 'fixnum)
@@ -752,17 +801,13 @@ remaining 12 bits allow address of 4k cells == 16k bytes
              (make-variable-ref exp env)))
           (t (error "unhandled case")))
     (cond ((eq (car exp) 'if) (logior *type-if* (list->prim-list (mapcar #'(lambda (x) (scompile-inner x env)) (cdr exp)))))
-          ((eq (car exp) 'car) (list->prim-call `(,*type-car-call* ,(scompile-inner (cadr exp) env))))
-          ((eq (car exp) 'cdr) (list->prim-call `(,*type-cdr-call* ,(scompile-inner (cadr exp) env))))
-          ((eq (car exp) 'rplaca) (list->prim-call `(,*type-rplaca-call*
-                                                      ,(scompile-inner (cadr exp) env)
-                                                      ,(scompile-inner (caddr exp) env))))
-          ((eq (car exp) 'rplacd) (list->prim-call `(,*type-rplacd-call*
-                                                      ,(scompile-inner (cadr exp) env)
-                                                      ,(scompile-inner (caddr exp) env))))
-          ((eq (car exp) 'cons) (list->prim-call `(,*type-cons-call*
-                                                    ,(scompile-inner (cadr exp) env)
-                                                    ,(scompile-inner (caddr exp) env))))
+          ((position (car exp) *one-arg-prim-funs* :key #'car)
+           (list->prim-call `(,(second (find (car exp) *one-arg-prim-funs* :key #'car))
+                               ,(scompile-inner (cadr exp) env))))
+          ((position (car exp) *two-arg-prim-funs* :key #'car)
+           (list->prim-call `(,(second (find (car exp) *two-arg-prim-funs* :key #'car))
+                               ,(scompile-inner (cadr exp) env)
+                               ,(scompile-inner (caddr exp) env))))
           ((eq (car exp) 'quote) (list->prim-list (mapcar #'(lambda (x) (scompile-inner x env)) (cadr exp))))
           ((eq (car exp) 'lambda) (logior *type-lambda*
                                           (prim-cons (scompile-inner (caddr exp) ; body
@@ -778,8 +823,6 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   machine/seval"
   (scompile-inner exp nil))
   
-
-
 
 ;;;;
 ;;;;

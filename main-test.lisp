@@ -152,6 +152,30 @@
     (seval (scompile '(cdr
                         ((lambda (a) (rplacd a 74))
                          (cons 999 998))))))
+  (assert-equal
+    52
+    (seval (scompile '(+ 25 27))))
+  (assert-equal
+    #xf0f
+    (seval (scompile '(land #xfff #xf0f))))
+  (assert-equal
+    #xf0f
+    (seval (scompile '(lior #xf00 #x00f))))
+  (assert-equal
+    #xf00
+    (seval (scompile '(lxor #xf0f #x00f))))
+  (assert-equal
+    #x0f0
+    (seval (scompile '(lnot #xf0f))))
+  (assert-equal
+    45
+    (seval (scompile '(inc 44))))
+  (assert-equal
+    8
+    (seval (scompile '(srl 4))))
+  (assert-equal
+    1
+    (seval (scompile '(srl #x800))))
   )
 
 (define-test eval-with-funcall
