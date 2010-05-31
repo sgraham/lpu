@@ -52,6 +52,13 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defparameter *type-rplacd-call*     (logior *type-primcall* 4))
 (defparameter *type-cons-call*       (logior *type-primcall* 5))
 (defparameter *type-fun-call*        (logior *type-primcall* 6))
+(defparameter *type-add-call*        (logior *type-primcall* 7))
+(defparameter *type-inc-call*        (logior *type-primcall* 8))
+(defparameter *type-and-call*        (logior *type-primcall* 9))
+(defparameter *type-or-call*         (logior *type-primcall* 10))
+(defparameter *type-xor-call*        (logior *type-primcall* 11))
+(defparameter *type-not-call*        (logior *type-primcall* 12))
+(defparameter *type-srl-call*        (logior *type-primcall* 13))
 (defparameter *type-symbol*          #b0010000000000000)
 (defparameter *type-variable*        #b0011000000000000)
 (defparameter *type-broken-heart*    #b0100000000000000) ; todo; this is sort of a pointer, but not really as it has no actual type
@@ -152,6 +159,13 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defun prim-rplacd-call? (p) (= p *type-rplacd-call*))
 (defun prim-cons-call? (p) (= p *type-cons-call*))
 (defun prim-fun-call? (p) (= p *type-fun-call*))
+(defun prim-add-call? (p) (= p *type-add-call*))
+(defun prim-inc-call? (p) (= p *type-inc-call*))
+(defun prim-and-call? (p) (= p *type-and-call*))
+(defun prim-or-call? (p) (= p *type-or-call*))
+(defun prim-xor-call? (p) (= p *type-xor-call*))
+(defun prim-not-call? (p) (= p *type-not-call*))
+(defun prim-srl-call? (p) (= p *type-srl-call*))
 (defun prim-symbol? (p) (= (logand p *type-mask*) *type-symbol*))
 (defun prim-variable? (p) (= (logand p *type-mask*) *type-variable*))
 (defun prim-broken-heart? (p) (= (logand p *type-mask*) *type-broken-heart*))
@@ -204,11 +218,27 @@ remaining 12 bits allow address of 4k cells == 16k bytes
           (logand *data-mask* kons))
         (logior (ash (prim-car kons :other other :raw t) 16) obj)))
 
-(defun prim-sub (v take)
-  (let ((ret (- v take)))
-    (if (< ret 0)
-      (+ ret #x1000)
+;
+; hardware alu, 12 bit no carry
+; 
+(defun prim-add (v amt)
+  (let ((ret (+ v amt)))
+    (if (> ret #xfff)
+      (- ret #x1000)
       ret)))
+(defun prim-inc (v)
+  (let ((ret (+ v 1)))
+    (if (> ret #xfff)
+      (- ret #x1000)
+      ret)))
+(defun prim-and (v with) (logand v with))
+(defun prim-or (v with) (logior v with))
+(defun prim-xor (v with) (logxor v with))
+(defun prim-not (v) (lognot v))
+(defun prim-srl (v)
+  "rotate 1 bit left"
+  (logior (ash v 1)
+          (ash (logand v #x800) -11)))
 
 (defun node-label (p &optional (addr? t))
   "get a sensible name for a node"
@@ -222,6 +252,13 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                  ((prim-rplacd-call? p) "RPLACD")
                  ((prim-cons-call? p) "CONS")
                  ((prim-fun-call? p) "FUNCALL")
+                 ((prim-add-call? p) "ADD")
+                 ((prim-inc-call? p) "INC")
+                 ((prim-and-call? p) "AND")
+                 ((prim-or-call? p) "OR")
+                 ((prim-xor-call? p) "XOR")
+                 ((prim-not-call? p) "NOT")
+                 ((prim-srl-call? p) "SRL")
                  ((prim-variable? p) (format nil "VARIABLE @ ~a,~a" ; top six bits are where in chain, bottom 6 are index in bucket
                                              (ash (prim-get-data p) -6)
                                              (logand (prim-get-data p) #b111111)))
@@ -440,7 +477,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
              (progn
                (setq *reg-val* (prim-cdr *reg-val*))
                (setq *reg-args* (logand #b000000111111 (prim-get-data *reg-exp*))) ; XXX TODO args used as temp. ok here?
-               (setq *reg-exp* (prim-sub (prim-get-data *reg-exp*) 64))
+               (setq *reg-exp* (prim-add (prim-get-data *reg-exp*) #xfc0)) ; there's no sub: 0xfc0 is (~64)+1 which is negation
                (setq *reg-exp* (logior *type-variable* *reg-exp* *reg-args*))
                (goto walk-chain-to-bucket))))
 
@@ -455,7 +492,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                (goto return))
              (progn
                (setq *reg-val* (prim-cdr *reg-val*))
-               (setq *reg-exp* (prim-sub (prim-get-data *reg-exp*) 1))
+               (setq *reg-exp* (prim-add (prim-get-data *reg-exp*) #xfff)) ; there's no sub: 0xfff is -1
                (goto find-variable-in-bucket))))
 
 
