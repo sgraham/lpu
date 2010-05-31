@@ -24,7 +24,7 @@ exp: expression being evaluated
 env: current environment
 val: result of evaluation
 args: evaluated arguments during call
-clink: control stack for recursing 
+stack: control stack for recursing 
 alloc: current allocation location
 
 32 bits cells is smallest unit of allocation
@@ -57,7 +57,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defparameter *type-broken-heart*    #b0100000000000000) ; todo; this is sort of a pointer, but not really as it has no actual type
 
 ; these need to have the high-bit set because they're or'd into
-; tag bits on a cons cell stored in clink
+; tag bits on a cons cell stored in stack
 (defparameter *type-retloc-if2*      #b1001000000000000)
 (defparameter *type-retloc-call-3*   #b1010000000000000)
 
@@ -90,15 +90,15 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defvar *reg-val* 0)
 (defvar *reg-env* 0)
 (defvar *reg-args* 0)
-(defvar *reg-clink* 0)
+(defvar *reg-stack* 0)
 
 (defun print-machine-state ()
- (format t "~%    exp = 0x~x~%    val = 0x~x~%    env = 0x~x~%    args = 0x~x~%    clink = 0x~x~%"
+ (format t "~%    exp = 0x~x~%    val = 0x~x~%    env = 0x~x~%    args = 0x~x~%    stack = 0x~x~%"
   *reg-exp*
   *reg-val*
   *reg-env*
   *reg-args*
-  *reg-clink*))
+  *reg-stack*))
 
 (defparameter *machine-logging* nil)
 (defparameter *machine-single-step* nil)
@@ -134,7 +134,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   (setq *reg-val* *prim-nil*)
   (setq *reg-env* *prim-nil*)
   (setq *reg-args* *prim-nil*)
-  (setq *reg-clink* *prim-nil*))
+  (setq *reg-stack* *prim-nil*))
 (reset-machine)
 
 (defun prim-null? (p) (= p *type-self-eval-ptr*))
@@ -474,8 +474,8 @@ remaining 12 bits allow address of 4k cells == 16k bytes
            ; save env, val (now the then/else), and return target (where
            ; we'll go after evaling the condition)
            (setq *reg-val* (prim-cdr *reg-exp*))
-           (setq *reg-clink* (prim-cons *reg-env* *reg-clink*))
-           (setq *reg-clink* (logior *type-retloc-if2* (prim-cons *reg-val* *reg-clink*)))
+           (setq *reg-stack* (prim-cons *reg-env* *reg-stack*))
+           (setq *reg-stack* (logior *type-retloc-if2* (prim-cons *reg-val* *reg-stack*)))
 
            ; set the expression to be evaluated to the condition, and
            ; 'recurse' (now that we've saved return info)
@@ -489,11 +489,11 @@ remaining 12 bits allow address of 4k cells == 16k bytes
            ; and evaluate either the 'then' or the 'else' of an if.
 
            ; first, 'pop' val (into exp) and env from our stack
-           (setq *reg-exp* (prim-car *reg-clink*))
-           (setq *reg-clink* (prim-cdr *reg-clink*))
+           (setq *reg-exp* (prim-car *reg-stack*))
+           (setq *reg-stack* (prim-cdr *reg-stack*))
 
-           (setq *reg-env* (prim-car *reg-clink*))
-           (setq *reg-clink* (prim-cdr *reg-clink*))
+           (setq *reg-env* (prim-car *reg-stack*))
+           (setq *reg-stack* (prim-cdr *reg-stack*))
 
            (if (= *reg-val* *type-self-eval-ptr*) ; nil
              ; if recursive evaluation was nil, then walk to the else
@@ -540,10 +540,10 @@ remaining 12 bits allow address of 4k cells == 16k bytes
            ; save the current environment, the current arguments
            ; that we've built up, and the next thing we're going
            ; to evaluate (using val as a temp).
-           (setq *reg-clink* (prim-cons *reg-env* *reg-clink*))
-           (setq *reg-clink* (prim-cons *reg-args* *reg-clink*))
+           (setq *reg-stack* (prim-cons *reg-env* *reg-stack*))
+           (setq *reg-stack* (prim-cons *reg-args* *reg-stack*))
            (setq *reg-val* (prim-cdr *reg-exp*))
-           (setq *reg-clink* (logior *type-retloc-call-3* (prim-cons *reg-val* *reg-clink*)))
+           (setq *reg-stack* (logior *type-retloc-call-3* (prim-cons *reg-val* *reg-stack*)))
 
            ; then, set the thing to be evaluated to the argument
            ; we're working on and recurse
@@ -557,12 +557,12 @@ remaining 12 bits allow address of 4k cells == 16k bytes
            ; we pop the current position in the parameters, the arguments and the
            ; environment off of the stack, add the just-evaluated result to args, and
            ; continue down the list of arguments
-           (setq *reg-exp* (prim-car *reg-clink*))     ; pop remaining params (exp)
-           (setq *reg-clink* (prim-cdr *reg-clink*))
-           (setq *reg-args* (prim-car *reg-clink*))    ; pop saved earlier args
-           (setq *reg-clink* (prim-cdr *reg-clink*))
-           (setq *reg-env* (prim-car *reg-clink*))     ; pop saved environment
-           (setq *reg-clink* (prim-cdr *reg-clink*))
+           (setq *reg-exp* (prim-car *reg-stack*))     ; pop remaining params (exp)
+           (setq *reg-stack* (prim-cdr *reg-stack*))
+           (setq *reg-args* (prim-car *reg-stack*))    ; pop saved earlier args
+           (setq *reg-stack* (prim-cdr *reg-stack*))
+           (setq *reg-env* (prim-car *reg-stack*))     ; pop saved environment
+           (setq *reg-stack* (prim-cdr *reg-stack*))
 
            ; add the sub-evaluation to the list of args, and continue on
            (setq *reg-args* (prim-cons *reg-val* *reg-args*))
@@ -638,7 +638,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
     ; ------------------------------------------
     (state return
-           (let ((exptype (logand *type-mask* *reg-clink*)))
+           (let ((exptype (logand *type-mask* *reg-stack*)))
              (cond ((= exptype *type-retloc-if2*) (goto if2))
                    ((= exptype *type-retloc-call-3*) (goto call-3)))))
     ))
@@ -648,7 +648,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   (setq *reg-val* *prim-nil*)
   (setq *reg-env* (prim-cons (logior *type-symbol* (prim-intern 'END-OF-ENV)) *prim-nil*))
   (setq *reg-args* *prim-nil*)
-  (setq *reg-clink* *prim-nil*)
+  (setq *reg-stack* *prim-nil*)
   ;(sdot-and-view sexp)
   (run-machine)
   *reg-val*)
