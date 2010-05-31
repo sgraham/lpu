@@ -83,4 +83,16 @@
           (assert-equal after1 after2)
           (assert-equal 0 *reg-cur-halfspace*))))))
 
+(define-test gc-code
+  (reset-machine)
+  (assert-equal 0 *reg-cur-halfspace*)
+  (let* ((x (scompile '((lambda (a b c) c) 532 88 46)))
+         (before (spprint x)))
+    (setq *reg-val* x)
+    (funcall *gc-func*)
+    (setq x *reg-val*)
+    (let ((after (spprint x)))
+      (assert-equal 1 *reg-cur-halfspace*)
+      (assert-equal before after))))
+
 (run-tests)
