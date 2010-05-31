@@ -36,6 +36,14 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 
 |#
 
+; we know these warnings aren't a problem, so to avoid changing the code
+; as distributed, just muffle the warning spam
+(declaim #+sbcl(sb-ext:muffle-conditions style-warning))
+(load "lisp-unit.lisp")
+(declaim #+sbcl(sb-ext:unmuffle-conditions style-warning))
+
+(declaim (optimize (safety 3)) (optimize (debug 3)) (optimize (speed 0)))
+
 (defparameter *type-is-ptr-mask*     #b1000000000000000)
 
 (defparameter *type-self-eval-ptr*   #b1000000000000000)
@@ -219,7 +227,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
         (logior (ash (prim-car kons :other other :raw t) 16) obj)))
 
 ;
-; hardware alu, 12 bit no carry
+; hardware alu, 12 bit no carry (yet?)
 ; 
 (defun prim-add (v amt)
   (let ((ret (+ v amt)))
@@ -690,3 +698,171 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   (run-machine)
   *reg-val*)
 
+
+;;;;
+;;;;
+;;;;
+;;;; compiler to the tagged machine representation
+;;;;
+;;;;
+;;;;
+
+(defun list->prim-list (L)
+  (if (null L)
+    *type-self-eval-ptr*
+    (prim-cons (car L) (list->prim-list (cdr L)))))
+
+(defun list->prim-call (L)
+  (labels ((rplacd-last-as-call-func (prim-L func)
+                                     (if (prim-null? (prim-cdr prim-L))
+                                       (prim-rplacd prim-L func)
+                                       (rplacd-last-as-call-func (prim-cdr prim-L) func))
+                                     prim-L))
+    (let* ((args (cdr L))
+           (func (car L)))
+      (rplacd-last-as-call-func (logior *type-call* (list->prim-list args))
+                                func))))
+
+;(sdot-and-view (list->prim-call `(,*type-car-call* ,(scompile 1) ,(scompile 'a))))
+
+
+; todo; make sure chain and pos fit in bits
+
+(defun make-variable-ref-inner (var env chain)
+  (let ((pos (position var (car env))))
+    (if (null pos)
+      (if (null (cdr env))
+        (error 'could-not-find-variable-in-environment :var var)
+        (make-variable-ref-inner var (cdr env) (+ chain 1)))
+      (logior *type-variable* (ash chain 6) pos))))
+
+(defun make-variable-ref (var env)
+  (make-variable-ref-inner var env 0))
+      
+;(run-tests variable-lookup)
+
+(defun scompile-inner (exp env)
+  (if (atom exp)
+    (cond ((typep exp 'fixnum)
+           (logior *type-self-eval-immed* exp))
+          ((null exp) *type-self-eval-ptr*)
+          ((typep exp 'symbol)
+           (if (keywordp exp)
+             (logior *type-symbol* (prim-intern exp))
+             (make-variable-ref exp env)))
+          (t (error "unhandled case")))
+    (cond ((eq (car exp) 'if) (logior *type-if* (list->prim-list (mapcar #'(lambda (x) (scompile-inner x env)) (cdr exp)))))
+          ((eq (car exp) 'car) (list->prim-call `(,*type-car-call* ,(scompile-inner (cadr exp) env))))
+          ((eq (car exp) 'cdr) (list->prim-call `(,*type-cdr-call* ,(scompile-inner (cadr exp) env))))
+          ((eq (car exp) 'rplaca) (list->prim-call `(,*type-rplaca-call*
+                                                      ,(scompile-inner (cadr exp) env)
+                                                      ,(scompile-inner (caddr exp) env))))
+          ((eq (car exp) 'rplacd) (list->prim-call `(,*type-rplacd-call*
+                                                      ,(scompile-inner (cadr exp) env)
+                                                      ,(scompile-inner (caddr exp) env))))
+          ((eq (car exp) 'cons) (list->prim-call `(,*type-cons-call*
+                                                    ,(scompile-inner (cadr exp) env)
+                                                    ,(scompile-inner (caddr exp) env))))
+          ((eq (car exp) 'quote) (list->prim-list (mapcar #'(lambda (x) (scompile-inner x env)) (cadr exp))))
+          ((eq (car exp) 'lambda) (logior *type-lambda*
+                                          (prim-cons (scompile-inner (caddr exp) ; body
+                                                                     (cons (cadr exp) env)) ; eval env
+                                                     ; this is say, docstring, or numargs or something
+                                                     *prim-nil*)))
+          (t (list->prim-call `(,*type-fun-call*
+                                 ,@(reverse (mapcar #'(lambda (x) (scompile-inner x env)) (cdr exp)))
+                                 ,(scompile-inner (car exp) env)))))))
+
+(defun scompile (exp)
+  "Convert regular lisp expression to simple expression to be evaluated by
+  machine/seval"
+  (scompile-inner exp nil))
+  
+
+
+
+;;;;
+;;;;
+;;;;
+;;;; simple garbage collector, currently written using CL stuff (not directly
+;;;; translatable to machine or user code)
+;;;;
+;;;;
+;;;;
+; scanning pointer used during gc. todo; is it really a register? how is it accessed?
+(defvar *reg-scan* 0)
+
+(defun copy-to-new-halfspace (p)
+  ;(print "c-t-n-h")
+  ;(print p)
+  (let ((p-type (logand *type-mask* p)))
+    (if (prim-atom? p)
+      ; if it's an atom don't do anything
+      p
+      (let ((p-car (prim-car p)))
+        ;(format nil "p=~x, car=~x~%" p p-car)
+        (if (prim-broken-heart? p-car)
+          ; if it's a broken heart, return the forwarded address
+          (logior p-type (prim-get-data p-car))
+          ; otherwise, allocate in the new halfspace and install
+          ; a broken heart in the old location
+          (let ((ret (prim-cons p-car (prim-cdr p) :other 1)))
+            (prim-rplaca p (logior *type-broken-heart* (logand ret *data-mask*)))
+            (logior p-type ret)))))))
+
+(defun host-gc ()
+  "scan current half space and copy live data to the other half space
+
+  roots are the 5 main machine registers, and memory slot 2, which points to
+  the garbage collector code itself."
+
+  (setf *reg-scan* 2)
+  (setf *reg-alloc* 2)
+
+  (setf *reg-exp* (copy-to-new-halfspace *reg-exp*))
+  (setf *reg-val* (copy-to-new-halfspace *reg-val*))
+  (setf *reg-env* (copy-to-new-halfspace *reg-env*))
+  (setf *reg-args* (copy-to-new-halfspace *reg-args*))
+  (setf *reg-stack* (copy-to-new-halfspace *reg-stack*))
+
+  ; copy registers if they're pointers
+  ; while scan hasn't caught up with alloc
+  ;     get value in car of scan in newHS = x
+  ;     if x isn't ptr
+  ;         done
+  ;     get value at car of x in oldHS = y
+  ;     if y is broken-heart,
+  ;         replace data in car of scan in newHS with data in y
+  ;     otherwise, alloc and copy whole x cell to newHS (not changing any ptr values)
+  ;         stomp broken-heart into car(x) in oldHS
+  ;         set car of scan to newlyallocated with same type as previously
+  ;
+  ;     repeat same for cdr
+  ;
+  ;     increment scan
+
+  ;(print "GC")
+
+  ;(handle-pointer 2)
+  (tagbody
+    :gc-next
+
+    (if (= *reg-scan* *reg-alloc*)
+      (go :gc-done))
+
+    (let ((carval (prim-car *reg-scan* :other 1 :raw t)))
+      (if (= (logand carval *type-is-ptr-mask*)
+             *type-is-ptr-mask*)
+        (prim-rplaca *reg-scan* (copy-to-new-halfspace carval) :other 1)))
+    (let ((cdrval (prim-cdr *reg-scan* :other 1 :raw t)))
+      (if (= (logand cdrval *type-is-ptr-mask*)
+             *type-is-ptr-mask*)
+        (prim-rplacd *reg-scan* (copy-to-new-halfspace cdrval) :other 1)))
+
+    (incf *reg-scan*)
+    (go :gc-next)
+
+    :gc-done)
+
+  (setf *reg-cur-halfspace* (logxor *reg-cur-halfspace* 1))
+  )
