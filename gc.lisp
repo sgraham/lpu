@@ -19,17 +19,20 @@
 (defun copy-to-new-halfspace (p)
   ;(print "c-t-n-h")
   ;(print p)
-  (if (prim-atom? p)
-    ; if it's an atom don't do anything
-    p
-    (if (prim-broken-heart? (prim-car p))
-      ; if it's a broken heart, return the forwarded address
-      (logior (logand *type-mask* p) (prim-get-data (prim-car p)))
-      ; otherwise, allocate in the new halfspace and install
-      ; a broken heart in the old location
-      (let ((ret (prim-cons (prim-car p) (prim-cdr p) :other 1)))
-        (prim-rplaca p (logior *type-broken-heart* ret))
-        ret))))
+  (let ((p-type (logand *type-mask* p)))
+    (if (prim-atom? p)
+      ; if it's an atom don't do anything
+      p
+      (let ((p-car (prim-car p)))
+        ;(format nil "p=~x, car=~x~%" p p-car)
+        (if (prim-broken-heart? p-car)
+          ; if it's a broken heart, return the forwarded address
+          (logior p-type (prim-get-data p-car))
+          ; otherwise, allocate in the new halfspace and install
+          ; a broken heart in the old location
+          (let ((ret (prim-cons p-car (prim-cdr p) :other 1)))
+            (prim-rplaca p (logior *type-broken-heart* (logand ret *data-mask*)))
+            (logior p-type ret)))))))
 
 (defun host-gc ()
   "scan current half space and copy live data to the other half space
@@ -45,6 +48,22 @@
   (setf *reg-env* (copy-to-new-halfspace *reg-env*))
   (setf *reg-args* (copy-to-new-halfspace *reg-args*))
   (setf *reg-clink* (copy-to-new-halfspace *reg-clink*))
+
+  ; copy registers if they're pointers
+  ; while scan hasn't caught up with alloc
+  ;     get value in car of scan in newHS = x
+  ;     if x isn't ptr
+  ;         done
+  ;     get value at car of x in oldHS = y
+  ;     if y is broken-heart,
+  ;         replace data in car of scan in newHS with data in y
+  ;     otherwise, alloc and copy whole x cell to newHS (not changing any ptr values)
+  ;         stomp broken-heart into car(x) in oldHS
+  ;         set car of scan to newlyallocated with same type as previously
+  ;
+  ;     repeat same for cdr
+  ;
+  ;     increment scan
 
   ;(print "GC")
 
