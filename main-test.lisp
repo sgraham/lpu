@@ -182,6 +182,9 @@
   (assert-equal
     *prim-t*
     (seval (scompile '(zerop 0))))
+  (assert-equal
+    42
+    (seval (scompile '(blit))))
   )
 
 (define-test eval-various-alu
@@ -278,6 +281,67 @@
                               total
                               (self (+ b-left #xfff) (+ total a))))
                           b 0))))))
+  ;;; a few fibonaccis
+  (assert-equal
+    0
+    (seval (scompile '((lambda (fib)
+                         (fib 0))
+                       (lambda (n)
+                         (if (zerop n)
+                           0
+                           (if (zerop (+ n #xfff))
+                             1
+                             (+ (self (+ n #xfff))
+                                (self (+ n #xffe))))))))))
+
+  (assert-equal
+    1
+    (seval (scompile '((lambda (fib)
+                         (fib 1))
+                       (lambda (n)
+                         (if (zerop n)
+                           0
+                           (if (zerop (+ n #xfff))
+                             1
+                             (+ (self (+ n #xfff))
+                                (self (+ n #xffe))))))))))
+  (assert-equal
+    1
+    (seval (scompile '((lambda (fib)
+                         (fib 2))
+                       (lambda (n)
+                         (if (zerop n)
+                           0
+                           (if (zerop (+ n #xfff))
+                             1
+                             (+ (self (+ n #xfff))
+                                (self (+ n #xffe))))))))))
+
+  (assert-equal
+    5
+    (seval (scompile '((lambda (fib)
+                         (fib 5))
+                       (lambda (n)
+                         (if (zerop n)
+                           0
+                           (if (zerop (+ n #xfff))
+                             1
+                             (+ (self (+ n #xfff))
+                                (self (+ n #xffe))))))))))
+
+  (reset-machine) ; too much memory otherwise, and gc doesn't survive yet!
+  (assert-equal
+    21
+    (seval (scompile '((lambda (fib)
+                         (fib 8))
+                       (lambda (n)
+                         (if (zerop n)
+                           0
+                           (if (zerop (+ n #xfff))
+                             1
+                             (+ (self (+ n #xfff))
+                                (self (+ n #xffe))))))))))
+
   )
 
 

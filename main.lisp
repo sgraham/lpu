@@ -68,6 +68,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defparameter *type-not-call*        (logior *type-primcall* 12))
 (defparameter *type-srl-call*        (logior *type-primcall* 13))
 (defparameter *type-zerop-call*      (logior *type-primcall* 14))
+(defparameter *type-blit-call*       (logior *type-primcall* 15))
 (defparameter *type-symbol*          #b0010000000000000)
 (defparameter *type-variable*        #b0011000000000000)
 (defparameter *type-broken-heart*    #b0100000000000000) ; todo; this is sort of a pointer, but not really as it has no actual type
@@ -126,9 +127,10 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   (if (and *machine-gc-on-every-cons* (= other 0))
     (host-gc))
   (if (>= *reg-alloc* 4096)
-    (progn
-      (assert (= other 0))
-      (host-gc)))
+    (error 'out-of-memory))
+    ;(progn
+      ;(assert (= other 0))
+      ;(host-gc)))
   (let ((loc *reg-alloc*))
     (setf (elt (elt *memory* (logxor *reg-cur-halfspace* other)) loc) (logior (ash kar 16) kdr))
     (incf *reg-alloc*)
@@ -176,6 +178,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
 (defun prim-not-call? (p) (= p *type-not-call*))
 (defun prim-srl-call? (p) (= p *type-srl-call*))
 (defun prim-zerop-call? (p) (= p *type-zerop-call*))
+(defun prim-blit-call? (p) (= p *type-blit-call*))
 (defun prim-symbol? (p) (= (logand p *type-mask*) *type-symbol*))
 (defun prim-variable? (p) (= (logand p *type-mask*) *type-variable*))
 (defun prim-broken-heart? (p) (= (logand p *type-mask*) *type-broken-heart*))
@@ -253,6 +256,8 @@ remaining 12 bits allow address of 4k cells == 16k bytes
   (if (= v 0)
     *prim-t*
     *prim-nil*))
+(defun prim-blit ()
+  (print "blitting"))
 
 (defun node-label (p &optional (addr? t))
   "get a sensible name for a node"
@@ -274,6 +279,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                  ((prim-not-call? p) "LNOT")
                  ((prim-srl-call? p) "SRL")
                  ((prim-zerop-call? p) "ZEROP")
+                 ((prim-blit-call? p) "BLIT")
                  ((prim-variable? p) (format nil "VARIABLE @ ~a,~a" ; top six bits are where in chain, bottom 6 are index in bucket
                                              (ash (prim-get-data p) -6)
                                              (logand (prim-get-data p) #b111111)))
@@ -589,6 +595,7 @@ remaining 12 bits allow address of 4k cells == 16k bytes
                       ((= *reg-exp* *type-not-call*) (goto not))
                       ((= *reg-exp* *type-srl-call*) (goto srl))
                       ((= *reg-exp* *type-zerop-call*) (goto zerop))
+                      ((= *reg-exp* *type-blit-call*) (goto blit))
                       ((= *reg-exp* *type-fun-call*) (goto fun-call))))
                    ((= exptype *type-call*) (goto call-2)))))
 
@@ -682,6 +689,10 @@ remaining 12 bits allow address of 4k cells == 16k bytes
            (goto return))
     (state zerop
            (setq *reg-val* (prim-zerop *reg-val*))
+           (goto return))
+    (state blit
+           ; todo; something
+           (setq *reg-val* 42)
            (goto return))
 
     ; ------------------------------------------
@@ -792,6 +803,9 @@ remaining 12 bits allow address of 4k cells == 16k bytes
       
 ;(run-tests variable-lookup)
 
+; todo should probably have some special business for 0 arg functions
+;      blit is currently silly
+
 (defparameter *one-arg-prim-funs* `((car ,*type-car-call*)
                                     (cdr ,*type-cdr-call*)
                                     (inc ,*type-inc-call*)
@@ -816,6 +830,9 @@ remaining 12 bits allow address of 4k cells == 16k bytes
              (make-variable-ref exp env)))
           (t (error "unhandled case")))
     (cond ((eq (car exp) 'if) (logior *type-if* (list->prim-list (mapcar #'(lambda (x) (scompile-inner x env)) (cdr exp)))))
+          ((eq (car exp) 'blit)
+           (list->prim-call `(,*type-blit-call*
+                               ,*prim-nil*)))
           ((position (car exp) *one-arg-prim-funs* :key #'car)
            (list->prim-call `(,(second (find (car exp) *one-arg-prim-funs* :key #'car))
                                ,(scompile-inner (cadr exp) env))))
