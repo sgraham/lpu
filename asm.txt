@@ -1,0 +1,162 @@
+user registers: A, D, P (16 bit)
+inaccessible registers: IP (14 bit), HEAP (12 bit), HALFSPACE (1 bit)
+
+10xxxxxx immlo  -- set low 6 of A
+11xxxxxx immhi  -- set high 6 of A
+= 128
+
+00000000 nop (needed for being able to align for abs j target)
+00000001 car -- from left of P into A
+00000010 cdr -- from right of P into D
+00000011 load -- from addr P into A/D as pair
+00000100 cons -- P = cons(nil, P) # + consad, consap, consdp pseudo-instrs that do (A D), etc. in 2 instrs
+00000101 rplaca -- store A into left of P
+00000110 rplacd -- store D into right of P
+00000111 rplacb -- store A & D into P
+
+00001000 ???
+00001001 ???
+00001010 ???
+00001011 ???
+00001100 ???
+00001101 ???
+00001110 ???
+00001111 ???
+
+(all on lower 12 bits)
+00010000 add A = A+D
+00010001 inc A = A+1
+00010010 xor A = A ^ D
+00010011 not A = ~A
+00010100 and A = A&D
+00010101 or  A = A|D
+00010110 rol A = A rol 1
+00010111 ror A = A ror 1
+
+00011000 move a->d
+00011001 move d->a
+00011010 move a->p
+00011011 move p->a
+00011100 move d->p
+00011101 move p->d
+00011110 swap a<->d
+00011111 swap a<->p
+
+00100000 decA
+00100001 decP
+00100010 ???
+00100011 ???
+00100100 atom -- A = atom? A  (& with some constant)
+00100101 ???
+00100110 lt A = A < D
+00100111 j to A*4 (IP = A<<2)
+
+various GC helpers (other halfspace, helpful ops, etc.)
+00101000 cons2
+00101001 heap=cdr(gc1)
+00101010
+00101011 ret_gc
+00101100 togglehs
+00101101 car2
+00101110 cdr2A
+00101111 store2
+
+0011xxxx settype of A
+= 16
+
+01xxxxxx jz +/- 32
+= 64
+
+
+------------------------------------------
+
+words at top of memory for GC & setup. must be set up in both hs
+GC1 = GC addr, tempIP (starts as loc of GC func, replaced by return to code while in GC)
+GC2 = _start of code, top_of_heap (to allow for storage of globals & code)
+
++--------------------------------------+--------------------+-----+
+| end of heap     ...    start of heap | _start (code)      |GC0/1|
++--------------------------------------+--------------------+-----+
+
+initially HEAP = cdr(GC1)
+CONSNP (this is an instruction, not code):
+    if HEAP == 0:
+        cdr(gc1) = IP
+        IP = car(GC1)
+        # GC calls this again to complete allocation after collection
+    else:
+        HEAP -= 1
+        car(HEAP) = nil
+        cdr(HEAP) = P
+        P = HEAP
+
+# collects, and clobbers P with a new allocation (but the cdr of newly allocated will be orig P)
+align
+GC:
+    # store A/D/P to other halfspace
+    # this is the *values* of ADP not what they point to (we don't know if
+    # they're even pointers yet). wastes the 2 cells, but makes this loop
+    # simpler and not require special cases for the registers
+    HEAP = cdr(GC1)         # OPCODE because regs aren't saved yet
+    togglehs  ### NEW       # OPCODE because inaccessible
+    cons # (0,P)
+    cons
+    store # (A,D)
+
+    # set P to start of heap == P = cdr(GC1)
+    imm GC1
+    move P, A
+    cdr
+    move D, P
+
+align
+next:
+    if P == HEAP:       # OPCODE because HEAP isn't accessible
+        reload(P)
+        cons            # do original allocation that got us here we assume
+        ret_gc (IP = cdr(GC1)) # OPCODE
+
+    # CAR first
+    car # A = car(P) in new HS
+    atom
+    jnz car_is_atom
+    
+    # temp, need P to load what this list points at
+    move d, p
+    car # A = car(P) from new HS (loaded again)
+    move p, a
+    togglehs ### OLD ###
+    car # load what the car points at
+    togglehs ### NEW ###
+    if broken-heart:
+        ##### if it's a broken heart, store the forwarded address back into the car
+        togglehs
+        car # load A again now that we know it IS a BH
+        togglehs
+        move p, d
+        rplaca # TODO XXX BUGBUG: need to mask in previous type from old car, type here is a BH
+    else:
+        ##### otherwise, allocate in the new HS, copy previous data
+        ##### and install a broken heart in the old location (whew)
+        togglehs
+        car # load A again now that we know it's NOT a BH
+        togglehs
+        cons
+
+        
+
+    
+
+    rplaca RET
+
+car_is_atom:
+
+    # then CDR, basically same as above
+    # ...
+
+    decP
+    imm @next
+    j
+
+
+# vim: set ft=asm:
