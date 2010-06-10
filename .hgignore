@@ -5,3 +5,4 @@ syntax: glob
 *exe
 tmp.dot
 tmp.png
+*.pyc

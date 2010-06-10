@@ -449,6 +449,15 @@ remaining 12 bits allow address of 4k cells == 16k bytes
             (goto other))
      ))
 
+    (seval (scompile '((lambda (mul)
+                         (mul 9 8))
+                       (lambda (a b)
+                         ((lambda (x y-left total)
+                            (if (zerop y-left)
+                              total
+                              (self x (+ y-left #xfff) (+ total x))))
+                          a b 0)))))
+
 ;;;
 ;;;
 ;;; main machine, seval to set up and run

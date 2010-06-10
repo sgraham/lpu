@@ -1,0 +1,210 @@
+INSTRUCTIONS
+------------
+
+16 bit stack
+GC uses SP to find "register" roots + TOS in a real register?
+
+reg: 16 bit SP
+reg: 16 bit TOS
+reg: 16 bit TOS2
+reg: 8|10|12 PC
+
+is consing in microcode silly?
+
+1xxx xxxx
+    push 7 bit immed, set IMM flag
+    if IMM already set, instead of pushing shift left by 7 and OR
+    everything except imm clears flag. don't insert other stuff, or plenty
+    will break
+
+0100 0000 A
+0100 0001 D
+0100 0010 A-H
+0100 0011 D-H
+replace TOS with car/cdr of TOS
+
+0100 0100 A
+0100 0101 D
+0100 0110 A-H
+0100 0111 D-H
+replace car/cdr of TOS-2 with TOS
+
+0010 xxxx ALU on TOS & TOS-2 (inc/dec/add/xor/and/not/shl/...)
+
+0110 TTTT
+j += TOS-2 if type(TOS) == immed
+0001 TTTT
+j += TOS-2 if low4(TOS) == immed (for prim calls)
+
+0101 0000
+j += TOS-2 if TOS == 0
+0101 0001 jnil
+j += TOS-2 if TOS == 32768 (nil)
+
+0101 0010
+pop
+0101 0011
+nop
+
+0101 0100
+halt
+
+
+0001 xxxx xxAA ABBB
+mr A,B -- move B to A
+
+0000 xxxx xxAA ABBB
+data A,B -- move B to A, masking off type (keep only 12 data bits)
+
+bit 3 is "use mask"
+
+
+
+0010 Hxxx xxAA ABBB
+car A,B -- load car of cell pointed to by B into A
+
+0011 Hxxx xxAA ABBB
+cdr A,B -- load cdr of cell pointed to by B into A
+
+bit 3 is low bit of shifted address
+bit 4 is modify halfspace to other address
+
+
+0100 Hxxx xxAA ABBB
+rplaca A,B -- replace car of cell pointed to by A with B
+
+0101 Hxxx xxAA ABBB
+rplacd A,B -- replace cdr of cell pointed to by A with B
+
+
+011M MMMA AABB BCCC
+cons A,IMMED,B,C -- create cons containing (B . C) with type IMMED and store into A
+
+
+100M MMMC LLLL LLLL
+jtype IMMED, LABEL -- compare top 4 bits of exp register to 4 IMMED, and jump N rel words
+if C == 1 always jump
+
+101
+
+111x xAAA IIII IIII
+IMM A, I -- shift A left by 8 and OR I into bottom
+
+jz
+jnil
+jprim
+setnil
+
+
+eval:
+    jtype t-self-eval-immed, self
+    jtype t-self-eval-ptr, self
+    jtype t-symbol, self
+    jtype t-variable, variable
+    jtype t-if, if1
+    jtype t-lambda, lambda
+    jtype t-call, call
+
+self:
+    mr val, exp
+    j return
+
+variable:
+    mr val, env
+    data exp, exp
+    ; fallthrough
+
+;; todo; change env to just require decrement to iterate to variable
+find-variable-value:
+    jz exp, find-variable-done
+    cdr val, val
+    dec exp
+    j find-variable-value
+
+find-variable-done:
+    car val, val
+    j return
+
+
+lambda:
+    cons val, t-closure, exp, env
+    j return
+
+if1:
+    cdr val, exp
+    cons stack, t-none env, stack
+    cons stack, t-retloc-if2, val, stack
+    car exp, exp
+    j eval
+
+if2:
+    car exp, stack
+    cdr stack, stack
+    car env, stack
+    cdr stack, stack
+
+    jnil val, if2-is-nil
+
+    cdr exp, exp
+    car exp, exp
+    j eval
+
+if2-is-nil:
+    car exp, exp
+    j eval
+
+
+call:
+    setnil args
+
+call-1:
+    jtype t-primcall, primcall
+    j call-2
+
+primcall:
+    jprim t-c-car, car
+    jprim t-c-cdr, cdr
+    ...
+    jprim t-funcall, funcall
+
+call-2:
+    cons stack, t-none, env, stack
+    cons stack, t-none, args, stack
+    cdr val, exp
+    cons stack, t-retloc-call-3, val, stack
+    car exp, exp
+    j eval
+
+call-3:
+    car exp, stack
+    cdr stack, stack
+    car args, stack
+    cdr stack, stack
+    car env, stack
+    cdr stack, stack
+
+    cons args, t-none, val, args
+    j call-1
+
+car:
+    car val, val
+    j return
+
+cdr:
+    cdr val, val
+    j return
+
+...
+
+funcall:
+    cdr args, args
+    cons args, t-none, val, args
+    car exp, val
+    car exp, exp
+    cdr val, val
+    cons env, t-none, args, val
+    j eval
+
+return:
+    jtype t-retloc-if2, if2
+    jtype t-retloc-call-3, call-3
