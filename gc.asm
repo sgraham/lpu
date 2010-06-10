@@ -55,6 +55,10 @@ next_cell:
 
 not_done_scan:
 
+    ##
+    ## handle the two fields of all objects in turn, car then cdr
+    ## 
+
     # first, check the CAR of SCAN
     imm GC0
     AtoP
@@ -67,7 +71,7 @@ not_an_atom:
     # otherwise, the car is a list pointer, load what it points at
     car             # reload A = car(P) where P is the cell we're scanning
     AtoP            # move that pointer into P
-    AtoD            # save off the pointer in D for a possible later copy
+    AtoD            # save off the pointer in D for later
     togglehs        # and load what it points to in the old HS
     car
     togglehs        # and toggle back to new
@@ -77,16 +81,33 @@ not_an_atom:
     isbh
     jz car_not_already_copied
 
-    # todo;
     # replace data in car of P in new HS with data part of pointer in old HS
     # pointer
+    DtoP            # load pointer to old obj saved above
+    imm 0xfff       # load data mask
+    AtoD            #   into D
+    togglehs        # load broken heart pointer value from old HS
+    car
+    togglehs
+    and
+    # A is now the pointer value we want to store into the car of SCAN, or'd
+    # with the type that's already there.
+    AtoD            # save to D
+    imm GC0         # load SCAN again
+    AtoP
+    car
+    AtoP            # load the car of the value that's currently in SCAN
+
+################ TODO
 
     j done_car
+
 car_not_already_copied:
 
     # otherwise, we allocate a new cons in the new HS, and copy the cell of
     # data that P's car points to (not replacing any pointer values so that we
     # still have the pointers to broken hearts in the old HS).
+    # (note, old obj ptr saved to D above)
     cons            # allocate the new cell                                     # PAD = NC,  x, OO
     PtoA            # save newly allocated cell in A                            # PAD = NC, NC, OO
     DtoP            # restore P to point to the object in the old HS            # PAD = OO, NC, OO
