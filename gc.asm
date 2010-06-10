@@ -120,7 +120,7 @@ car_not_already_copied:
     car                                                                         # PAD =pSC,SCN, NC
     AtoP                                                                        # PAD =SCN,SCN, NC
     car             # load old type from car of SCAN                            # PAD =SCN, AD, NC
-    DtoAdata                                                                    # PAD =SCN,TNC, NC
+    DtoAlo                                                                      # PAD =SCN,TNC, NC
     rplaca
 
 

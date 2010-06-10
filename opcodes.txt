@@ -115,7 +115,7 @@
 00101100 freecells
     A[b-0] = HEAP
     A[f-c] = 0                      # 0 == fixnum tag
-00101101 DtoAdata
+00101101 DtoAlo
     A[b-0] = D[b-0]                 # todo; this instr seems very lame
 00101110 ?
 00101111 ?
