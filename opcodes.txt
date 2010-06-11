@@ -5,8 +5,9 @@
 # the register and memory operations are specified with bit ranges from high to low.
 #
 # user registers are A, D, P, all 16 bits
-# inaccessible registers: HEAP (12 bits), SCAN (12 bits), HS (1 bit), IP (14 bits), INSTR (8 bits)
-#   (SCAN is pseudo-accessible, but not very useful and is volatile across cons/gc.)
+# inaccessible registers: HEAP (12 bits), HS (1 bit), IP (14 bits), INSTR (8 bits)
+#
+# see also comments in gc.asm for layout of heap which corresponds to some constants here
 #
 # jty?
 # locals or 16b fixed size stack at top of mem?
