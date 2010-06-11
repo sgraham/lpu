@@ -2,10 +2,11 @@
 # GC0 = temp for GC
 # GC1 = GC addr, tempIP (starts as loc of GC func, replaced by return to code while in GC)
 # GC2 = _start of code, top_of_heap (to allow for storage of globals & code)
+# locals? = 32 bytes, 16 16 bit words used for local evaluation
 # 
-# +--------------------------------------+--------------------+-----+
-# | end of heap     ...    start of heap | _start (code)      |GC012|
-# +--------------------------------------+--------------------+-----+
+# +--------------------------------------+---------------+--------+-----+
+# | end of heap     ...    start of heap | _start (code) | locals |GC012|
+# +--------------------------------------+---------------+--------+-----+
 # 
 # initially HEAP = cdr(GC1) via 'resetheap' instr
 # on first startup, have to dec heap twice so that there's room for the two
@@ -13,12 +14,11 @@
 # wouldn't have any room for those two temporaries otherwise)
 
 
-
-
 # runs garbage collection, switches active halfspace, and clobbers P with a
 # new allocation (based on assumption we're called from a failed cons). old
 # P is the cdr of newly allocated cell per normal cons behaviour.
-align
+.align
+.public
 GC:
     # store A/D/P to other halfspace
     # this is the values of the registers, not what they point at (we don't
@@ -39,7 +39,7 @@ GC:
     cdr             # load value
     DtoP            # and put it into P which we use as the "scan" register for GC
 
-align               # align so we can jump from the bottom
+.align              # align so we can jump from the bottom
 next_cell:
     
     # SCAN == car of GC0. When SCAN catches up with HEAP we've walked the
@@ -84,21 +84,24 @@ not_an_atom:
     # replace data in car of P in new HS with data part of pointer in old HS
     # pointer
     DtoP            # load pointer to old obj saved above
-    imm 0xfff       # load data mask
-    AtoD            #   into D
     togglehs        # load broken heart pointer value from old HS
     car
     togglehs
-    and
-    # A is now the pointer value we want to store into the car of SCAN, or'd
+    shl4            # remove type from value loaded from old HS
+    shr4
+    # A is now the pointer value we want to store into the car of SCAN, and
+    # we want to or it with what's already there
     # with the type that's already there.
-    AtoD            # save to D
+    AtoD            # save pointer value to D
     imm GC0         # load SCAN again
     AtoP
     car
     AtoP            # load the car of the value that's currently in SCAN
-
-################ TODO
+    car             # A is now the old pointer value, with type
+    shl12           # drop data from current value, but keep type
+    shr12
+    or              # or D (the pointer value) into the type in A
+    rplaca          # and store the whole thing back into what we're scanning
 
     j done_car
 
@@ -131,7 +134,12 @@ car_not_already_copied:
     # now, P is old ptr, A is new ptr
 
     # then, stomp a broken heart (tag and pointer) into oldHS
-    setbh
+    AtoD                                                                        # PAD = OO, NC, NC
+    immlo 0x8
+    or                                                                          # PAD = OO,TNC, NC
+    togglehs
+    rplaca          # store new ptr with broken heart type into old HS
+    togglehs
 
     # and, finally, set the car to the newly allocated pointer, leaving
     # type the same
@@ -140,12 +148,11 @@ car_not_already_copied:
     AtoP                                                                        # PAD =pSC,pSC, NC
     car                                                                         # PAD =pSC,SCN, NC
     AtoP                                                                        # PAD =SCN,SCN, NC
-    car             # load old type from car of SCAN                            # PAD =SCN, AD, NC
-    DtoAlo                                                                      # PAD =SCN,TNC, NC
-    rplaca
+    DtoA                                                                        # PAD =SCN, NC, NC
+    rplacadata      # write NC ptr to SCANs car
 
 
-align
+.align
 done_car:
 
 

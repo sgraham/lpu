@@ -8,52 +8,68 @@
 # inaccessible registers: HEAP (12 bits), SCAN (12 bits), HS (1 bit), IP (14 bits), INSTR (8 bits)
 #   (SCAN is pseudo-accessible, but not very useful and is volatile across cons/gc.)
 #
+# jty?
+# locals or 16b fixed size stack at top of mem?
+# helpers for simple nth (for locals in a list)
+#   pseudo elt == cdr*N car
+#   pseudo setf elt == cdr*N rplaca
 
 00000000 nop
 00000001 car
-    A[7-0] = MEM[P[b-0]*4][7-0]
+    A[7-0] = MEM[P[b-0]*4+0][7-0]
     A[f-8] = MEM[P[b-0]*4+1][7-0]
 00000010 cdr
     D[7-0] = MEM[P[b-0]*4+2][7-0]
     D[f-8] = MEM[P[b-0]*4+3][7-0]
 00000011 load
-    A[7-0] = MEM[P[b-0]*4][7-0]
+    A[7-0] = MEM[P[b-0]*4+0][7-0]
     A[f-8] = MEM[P[b-0]*4+1][7-0]
     D[7-0] = MEM[P[b-0]*4+2][7-0]
     D[f-8] = MEM[P[b-0]*4+3][7-0]
 00000100 cons
     if HEAP == 0:
-        CDR(GC1) = IP
-        IP = CAR(GC1)
+        MEM[GC1+2][7-0] = IP[7-0]
+        MEM[GC1+3][d-8] = IP[d-8]
+        IP[7-0] = MEM[GC1+0][7-0]
+        IP[d-8] = MEM[GC1+1][d-8]
     else:
-        HEAP -= 1
-        CAR(HEAP) = NIL
-        CDR(HEAP) = P
+        HEAP = HEAP - 1
+        MEM[HEAP*4+0][7-0] = 0
+        MEM[HEAP*4+1][f-8] = 0x40
+        MEM[HEAP*4+2][7-0] = P[7-0]
+        MEM[HEAP*4+3][f-8] = P[f-8]
         P = HEAP
 00000101 rplaca
-    MEM[P[b-0]*4][7-0] = A[7-0]
+    MEM[P[b-0]*4+0][7-0] = A[7-0]
     MEM[P[b-0]*4+1][7-0] = A[f-8]
 00000110 rplacd
     MEM[P[b-0]*4+2][7-0] = D[7-0]
     MEM[P[b-0]*4+3][7-0] = D[f-8]
 00000111 rplacb
-    MEM[P[b-0]*4][7-0] = A[7-0]
+    MEM[P[b-0]*4+0][7-0] = A[7-0]
     MEM[P[b-0]*4+1][7-0] = A[f-8]
     MEM[P[b-0]*4+2][7-0] = D[7-0]
     MEM[P[b-0]*4+3][7-0] = D[f-8]
 
-00001000 ?
-00001001 ?
-00001010 ?
-00001100 ?
-00001101 ?
+00001000 shl4
+    A[b-0] = A[b-0] << 4
+00001001 shr4
+    A[b-0] = A[b-0] >> 4
+00001010 shl12
+    A[b-0] = A[b-0] << 12
+00001011 shr12
+    A[b-0] = A[b-0] >> 12
+00001100 shl1
+    A[b-0] = A[b-0] << 1
+00001101 shr1
+    A[b-0] = A[b-0] >> 1
 00001110 ?
 00001111 ?
 
 00010000 add
     A[b-0] = A[b-0] + D[b-0]
-00010001 inc
-    A[b-0] = A[b-0] + 1
+00010001 sub
+    A[b-0] = A[b-0] - D[b-0]
 00010010 xor
     A[b-0] = A[b-0] ^ D[b-0]
 00010011 not
@@ -62,10 +78,10 @@
     A[b-0] = A[b-0] & D[b-0]
 00010101 or
     A[b-0] = A[b-0] | D[b-0]
-00010110 shl
-    A[b-0] = A[b-0] << 1
-00010111 shr
-    A[b-0] = A[b-0] >> 1
+00010110 inc
+    A[b-0] = A[b-0] + 1
+00010111 dec
+    A[b-0] = A[b-0] - 1
 
 00011000 AtoD
     D[f-0] = A[f-0]
@@ -88,13 +104,11 @@
     A[f-0] = P[f-0]
     P[f-0] = tmp
 
-00100000 decA
-    A[b-0] = A[b-0] - 1
-00100001 decP
-    P[b-0] = P[b-0] - 1
+00100000 ?
+00100001 ?
 00100010 ?
 00100011 ?
-00100100 isatom
+00100100 ?
     A[f-0] = ~A[f-f]
 00100100 putc
 00100110 lt
@@ -106,22 +120,17 @@
     HS = HS ^ 1
 00101001 resetheap
     HEAP = cdr(GC1)
-00101010 isbh
-    A[f-0] = A[e-e]
-00101011 setbh
-    MEM[P[b-0]*4][7-7] = 1          # set top bit of car of P
-    MEM[P[b-0]*4][3-0] = A[b-8]     # store A as ptr to new HS
-    MEM[P[b-0]*4+1][7-0] = A[7-0]
-00101100 freecells
+00101010 freecells
     A[b-0] = HEAP
     A[f-c] = 0                      # 0 == fixnum tag
-00101101 DtoAlo
-    A[b-0] = D[b-0]                 # todo; this instr seems very lame
+00101011 ?
+00101100 ?
+00101101 ?
 00101110 ?
 00101111 ?
 
-0011xxxx setty N
-    A[f-c] = INSTR[3-0]
+# possibly a shift l/r by +-8?
+0011xxxx ?
 
 01xxxxxx jz L
     # todo; sign extension
@@ -129,9 +138,130 @@
 
 10xxxxxx immlo N
     A[5-0] = INSTR[5-0]
-    A[b-6] = 0 # todo; want this?
+    A[b-6] = 0
 
 11xxxxxx immhi N
     A[b-6] = INSTR[5-0]
+
+
+pseudo isbh     # top bit is set?
+    shr12
+    shl
+    shr4
+
+pseudo islist   # second-from-top bit is set?
+    shl
+    shr12
+    shl
+    shr4
+
+pseudo isatom   # second-from-top bit is clear?
+    islist
+    not
+
+pseudo elt0     # walk proper list to a constant depth
+    car
+
+pseudo elt1
+    cdr
+    car
+
+pseudo elt2
+    cdr
+    cdr
+    car
+
+pseudo elt3
+    cdr
+    cdr
+    cdr
+    car
+
+pseudo elt4
+    cdr
+    cdr
+    cdr
+    cdr
+    car
+
+pseudo elt5
+    cdr
+    cdr
+    cdr
+    cdr
+    cdr
+    car
+
+pseudo elt6
+    cdr
+    cdr
+    cdr
+    cdr
+    cdr
+    cdr
+    car
+
+pseudo elt7
+    cdr
+    cdr
+    cdr
+    cdr
+    cdr
+    cdr
+    cdr
+    car
+
+pseudo setl0
+    rplaca
+
+pseudo setl1
+    cdr
+    rplaca
+
+pseudo setl2
+    cdr
+    cdr
+    rplaca
+
+pseudo setl3
+    cdr
+    cdr
+    cdr
+    rplaca
+
+pseudo setl4
+    cdr
+    cdr
+    cdr
+    cdr
+    rplaca
+
+pseudo setl5
+    cdr
+    cdr
+    cdr
+    cdr
+    cdr
+    rplaca
+
+pseudo setl6
+    cdr
+    cdr
+    cdr
+    cdr
+    cdr
+    cdr
+    rplaca
+
+pseudo setl7
+    cdr
+    cdr
+    cdr
+    cdr
+    cdr
+    cdr
+    cdr
+    rplaca
+
 
 # vim: set ft=asm:
