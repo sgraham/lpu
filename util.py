@@ -46,6 +46,10 @@ class Opcode:
     def Decode(asInt):
         return Opcode._intToOp[asInt].decode(asInt)
 
+    @staticmethod
+    def AddPseudo(name):
+        
+
     def __repr__(self):
         return "<%s=%d>" % (self.name, self.opcode)
 
@@ -67,6 +71,9 @@ def readOpDesc(opcodedesc):
             oparg = None
             if ' ' in mnemonic: mnemonic, oparg = mnemonic.split()
             Opcode(mnemonic, bits, oparg)
+        elif line.startswith("pseudo"):
+            pseudo, name = line.split(" ")
+            Opcode.addPseudo(name)
         else:
             raise Exception("confused by '%s'" % line)
     #print Opcode._opcodes.keys()
