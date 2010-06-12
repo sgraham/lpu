@@ -15,7 +15,8 @@
 ;   pseudo elt == cdr*N car
 ;   pseudo setf elt == cdr*N rplaca
 
-(defvar *name-to-opcode* (make-hash-table))
+(defvar *name-to-opdata* (make-hash-table))
+(defvar *opcode-to-opdata* (make-hash-table))
 
 (defclass opdata ()
   ((name
@@ -29,11 +30,13 @@
      :reader body)))
 
 (defmacro op (opcode mnemonic &body body)
-  `(setf (gethash ,mnemonic *name-to-opcode*)
-         (make-instance 'opdata 
-                        :name ,mnemonic
-                        :opcode ,opcode
-                        :body ',body)))
+  `(progn
+     (let ((data (make-instance 'opdata 
+                                :name ,mnemonic
+                                :opcode ,opcode
+                                :body '(progn ,@body))))
+       (setf (gethash ,mnemonic *name-to-opdata*) data)
+       (setf (gethash ,opcode *opcode-to-opdata*) data))))
 
 (defmacro pseudo (mnemonic &body body)
   )
@@ -88,15 +91,22 @@
                              ret))
                        (reverse bits))))))
 
+(defun integer-to-bits (num width)
+  (make-array width
+              :initial-contents
+              (reverse (loop repeat width
+                             for i = 1 then (* i 2)
+                             collecting (if (= i (logand i num)) 1 0)))))
+
 (defun readram (offset)
-  "always indexed by P + byte offset + halfspace offset, and in 8 bit chunks"
+  "always indexed by lower 12 of P + byte offset + halfspace offset, and in 8 bit chunks"
   (let* ((addr (bits-to-integer (concatenate 'vector (getHS 0 0) (getP #xB #x0) (bits-for-offset offset))))
          (bit-addr-low (* addr 8))
          (bit-addr-high (+ bit-addr-low 7)))
    (getMEM bit-addr-high bit-addr-low)))
 
 (defun writeram (offset val)
- "always indexed by P + byte offset + halfspace offset, and in 8 bit chunks"
+ "always indexed by lower 12 of P + byte offset + halfspace offset, and in 8 bit chunks"
   (assert (and (>= offset 0)
                (< offset 4)))
   (let* ((addr (bits-to-integer (concatenate 'vector (getHS 0 0) (getP #xB #x0) (bits-for-offset offset))))
@@ -104,16 +114,78 @@
          (bit-addr-high (+ bit-addr-low 7)))
    (setMEM bit-addr-high bit-addr-low val)))
 
+(defun getZero (width) (make-array width :element-type 'bit :initial-element 0))
 
-;(maphash #'(lambda (k v) (format t "~a => ~a~%" k v)) *name-to-opcode*)
+;(eval (body (gethash 'car *name-to-opdata*)))
+
+;(maphash #'(lambda (k v) (format t "~a => ~a~%" k v)) *name-to-opdata*)
+
+; todo; is this a builtin? must be a better way to write at least
+(defun flatten (l)
+  (cond
+    ((null l) nil)
+    ((atom l) (list l))
+    (t (concatenate 'list
+                    (flatten (car l))
+                    (flatten (cdr l))))))
+
+(flatten '(1 2 (3 4) 3))
+
+; todo; label extraction and alignment as a prepass
+(defmacro lpuas (&body instrs)
+  `(flatten (mapcar #'(lambda (x)
+                        (if (listp x)
+                          (cond ((eq (car x) 'imm)
+                                 (list (opcode (gethash
+                                                 (instrn 'immlo (logand (cadr x) #b111111))
+                                                 *name-to-opdata*))
+                                       (opcode (gethash
+                                                 (instrn 'immhi (ash (logand (cadr x) #b111111000000) -6))
+                                                 *name-to-opdata*))))
+                                ((eq (car x) 'immlo)
+                                 (opcode (gethash
+                                           (instrn 'immlo (logand (cadr x) #b111111))
+                                           *name-to-opdata*)))
+                                ((eq (car x) 'immhi)
+                                 (opcode (gethash
+                                           (instrn 'immhi (ash (logand (cadr x) #b111111000000) -6))
+                                           *name-to-opdata*))))
+                          (opcode (gethash x *name-to-opdata*))))
+                    ',instrs)))
+
+(defun lpudis (instrs) (mapcar #'(lambda (x) (name (gethash x *opcode-to-opdata*))) instrs))
+
+(defun lpurun (instrs)
+  (mapc #'(lambda (x)
+            (setIR #x7 #x0 (integer-to-bits x 8))
+            (eval (body (gethash x *opcode-to-opdata*))))
+        instrs)
+  'halt)
+
+(lpurun
+  (lpuas
+    (imm 72) ; H
+    putc
+    (imm 101) ; e
+    putc
+    (imm 108) ; l
+    putc
+    putc
+    (imm 111) ; o
+    putc
+    (imm 33) ; !
+    putc))
+
+
+  
 
 (op #b00000000 'nop)
 (op #b00000001 'car
   (setA #x7 #x0 (readram 0))
-  (setA #xF #x8 (readram 1))
+  (setA #xF #x8 (readram 1)))
 (op #b00000010 'cdr
   (setD #x7 #x0 (readram 2))
-  (setD #xF #x8 (readram 3))
+  (setD #xF #x8 (readram 3)))
 ;(op #b00000011 unassigned)
 (op #b00000100 'cons)
 (op #b00000101 'rplaca
@@ -172,7 +244,8 @@
 ;(op #b00100010 unassigned)
 ;(op #b00100011 unassigned)
 ;(op #b00100100 unassigned)
-(op #b00100101 'putc)
+(op #b00100101 'putc
+  (princ (code-char (bits-to-integer (getA #x7 #x0)))))
 (op #b00100110 'lt)
 (op #b00100111 'j)
 
@@ -192,17 +265,21 @@
 
 ; todo; some of jz0/jz1/jz-1 don't make sense and could be reused
 ; one is a nop, could reuse 00000000 opcode
+(defun instrn (sym n)
+  (intern (concatenate 'string (symbol-name sym) (write-to-string n))))
+
 (loop for i from -32 to 31 do
       (op (logior #b01000000 (logand i #b111111))
-        (intern (concatenate 'string (symbol-name 'jz) (write-to-string i)))))
+       (instrn 'jz i)))
 
 (loop for i from 0 to 63 do
-      (op (logior #b10000000 i)
-        (intern (concatenate 'string (symbol-name 'immlo) (write-to-string i)))))
+      (op (logior #b10000000 i) (instrn 'immlo i)
+       (setA #x5 #x0 (getIR #x5 #x0))
+       (setA #xf #x6 (getZero 10))))
 
 (loop for i from 0 to 63 do
-      (op (logior #b11000000 i)
-        (intern (concatenate 'string (symbol-name 'immhi) (write-to-string i)))))
+      (op (logior #b11000000 i) (instrn 'immhi i)
+        (setA #xb #x6 (getIR #x5 #x0))))
 
 (pseudo load ; load both car and cdr
   car
@@ -242,260 +319,6 @@
 (pseudo setl3 cdr cdr cdr rplaca)
 (pseudo setl4 cdr cdr cdr cdr rplaca)
 (pseudo setl5 cdr cdr cdr cdr cdr rplaca)
-
-#|
-00000000 nop
-00000001 car
-    A[7-0] = MEM[P[b-0]*4+0][7-0]
-    A[f-8] = MEM[P[b-0]*4+1][7-0]
-00000010 cdr
-    D[7-0] = MEM[P[b-0]*4+2][7-0]
-    D[f-8] = MEM[P[b-0]*4+3][7-0]
-00000011 load
-    A[7-0] = MEM[P[b-0]*4+0][7-0]
-    A[f-8] = MEM[P[b-0]*4+1][7-0]
-    D[7-0] = MEM[P[b-0]*4+2][7-0]
-    D[f-8] = MEM[P[b-0]*4+3][7-0]
-00000100 cons
-    if HEAP == 0:
-        MEM[GC1+2][7-0] = IP[7-0]
-        MEM[GC1+3][d-8] = IP[d-8]
-        IP[7-0] = MEM[GC1+0][7-0]
-        IP[d-8] = MEM[GC1+1][d-8]
-    else:
-        HEAP = HEAP - 1
-        MEM[HEAP*4+0][7-0] = 0
-        MEM[HEAP*4+1][f-8] = 0x40
-        MEM[HEAP*4+2][7-0] = P[7-0]
-        MEM[HEAP*4+3][f-8] = P[f-8]
-        P = HEAP
-00000101 rplaca
-    MEM[P[b-0]*4+0][7-0] = A[7-0]
-    MEM[P[b-0]*4+1][7-0] = A[f-8]
-00000110 rplacd
-    MEM[P[b-0]*4+2][7-0] = D[7-0]
-    MEM[P[b-0]*4+3][7-0] = D[f-8]
-00000111 rplacb
-    MEM[P[b-0]*4+0][7-0] = A[7-0]
-    MEM[P[b-0]*4+1][7-0] = A[f-8]
-    MEM[P[b-0]*4+2][7-0] = D[7-0]
-    MEM[P[b-0]*4+3][7-0] = D[f-8]
-
-00001000 shl4
-    A[b-0] = A[b-0] << 4
-00001001 shr4
-    A[b-0] = A[b-0] >> 4
-00001010 shl12
-    A[b-0] = A[b-0] << 12
-00001011 shr12
-    A[b-0] = A[b-0] >> 12
-00001100 shl1
-    A[b-0] = A[b-0] << 1
-00001101 shr1
-    A[b-0] = A[b-0] >> 1
-00001110 ?
-00001111 ?
-
-00010000 add
-    A[b-0] = A[b-0] + D[b-0]
-00010001 sub
-    A[b-0] = A[b-0] - D[b-0]
-00010010 xor
-    A[b-0] = A[b-0] ^ D[b-0]
-00010011 not
-    A[b-0] = ~A[b-0]
-00010100 and
-    A[b-0] = A[b-0] & D[b-0]
-00010101 or
-    A[b-0] = A[b-0] | D[b-0]
-00010110 inc
-    A[b-0] = A[b-0] + 1
-00010111 dec
-    A[b-0] = A[b-0] - 1
-
-00011000 AtoD
-    D[f-0] = A[f-0]
-00011001 DtoA
-    A[f-0] = D[f-0]
-00011010 AtoP
-    P[f-0] = A[f-0]
-00011011 PtoA
-    A[f-0] = P[f-0]
-00011100 DtoP
-    P[f-0] = D[f-0]
-00011101 PtoD
-    D[f-0] = P[f-0]
-00011110 swapAD
-    tmp = A[f-0]
-    A[f-0] = D[f-0]
-    D[f-0] = tmp
-00011111 swapAP
-    tmp = A[f-0]
-    A[f-0] = P[f-0]
-    P[f-0] = tmp
-
-00100000 ?
-00100001 ?
-00100010 ?
-00100011 ?
-00100100 ?
-    A[f-0] = ~A[f-f]
-00100100 putc
-00100110 lt
-00100111 j
-    IP = A[b-0]*4
-
-# GC helpers
-00101000 togglehs
-    HS = HS ^ 1
-00101001 resetheap
-    HEAP = cdr(GC1)
-00101010 freecells
-    A[b-0] = HEAP
-    A[f-c] = 0                      # 0 == fixnum tag
-00101011 ?
-00101100 ?
-00101101 ?
-00101110 ?
-00101111 ?
-
-# possibly a shift l/r by +-8?
-0011xxxx ?
-
-01xxxxxx jz L
-    # todo; sign extension
-    IP = IP + INSTR[5-0]
-
-10xxxxxx immlo N
-    A[5-0] = INSTR[5-0]
-    A[b-6] = 0
-
-11xxxxxx immhi N
-    A[b-6] = INSTR[5-0]
-
-
-pseudo isbh     # top bit is set?
-    shr12
-    shl
-    shr4
-
-pseudo islist   # second-from-top bit is set?
-    shl
-    shr12
-    shl
-    shr4
-
-pseudo isatom   # second-from-top bit is clear?
-    shl
-    shr12
-    shl
-    shr4
-    not
-
-pseudo elt0     # walk proper list to a constant depth
-    car
-
-pseudo elt1
-    cdr
-    car
-
-pseudo elt2
-    cdr
-    cdr
-    car
-
-pseudo elt3
-    cdr
-    cdr
-    cdr
-    car
-
-pseudo elt4
-    cdr
-    cdr
-    cdr
-    cdr
-    car
-
-pseudo elt5
-    cdr
-    cdr
-    cdr
-    cdr
-    cdr
-    car
-
-pseudo elt6
-    cdr
-    cdr
-    cdr
-    cdr
-    cdr
-    cdr
-    car
-
-pseudo elt7
-    cdr
-    cdr
-    cdr
-    cdr
-    cdr
-    cdr
-    cdr
-    car
-
-pseudo setl0
-    rplaca
-
-pseudo setl1
-    cdr
-    rplaca
-
-pseudo setl2
-    cdr
-    cdr
-    rplaca
-
-pseudo setl3
-    cdr
-    cdr
-    cdr
-    rplaca
-
-pseudo setl4
-    cdr
-    cdr
-    cdr
-    cdr
-    rplaca
-
-pseudo setl5
-    cdr
-    cdr
-    cdr
-    cdr
-    cdr
-    rplaca
-
-pseudo setl6
-    cdr
-    cdr
-    cdr
-    cdr
-    cdr
-    cdr
-    rplaca
-
-pseudo setl7
-    cdr
-    cdr
-    cdr
-    cdr
-    cdr
-    cdr
-    cdr
-    rplaca
-|#
 
 
 ; vim: set lispwords+=op,pseudo:

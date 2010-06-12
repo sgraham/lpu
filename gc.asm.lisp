@@ -50,7 +50,7 @@
     freecells       ; HEAPtoA
     xor             ; eq: if they're the same, it'll be all clear bits
     not             ;     then not to make that true
-    jz not_done_scan
+    (jz not_done_scan)
     ; todo; restore regs, return
 
   (label not_done_scan)
@@ -64,8 +64,8 @@
     AtoP
     car             ; A = car(P) from new halfspace
     isatom
-    jz not_an_atom  ; if the value's not a pointer, it's already in the new HS and there's nothing to do
-    j done_car      ; branch is too far for jnz
+    (jz not_an_atom); if the value's not a pointer, it's already in the new HS and there's nothing to do
+    (j done_car)    ; branch is too far for jnz
   (label not_an_atom)
 
     ; otherwise, the car is a list pointer, load what it points at
@@ -79,7 +79,7 @@
     ; just want to replace the data portion of the car of it with the value
     ; in the old HS (which is the pointer to the moved object in the new HS).
     isbh
-    jz car_not_already_copied
+    (jz car_not_already_copied)
 
     ; replace data in car of P in new HS with data part of pointer in old HS
     ; pointer
@@ -103,7 +103,7 @@
     or              ; or D (the pointer value) into the type in A
     rplaca          ; and store the whole thing back into what we're scanning
 
-    j done_car
+    (j done_car)
 
   (label car_not_already_copied)
 
@@ -135,7 +135,7 @@
 
     ; then, stomp a broken heart (tag and pointer) into oldHS
     AtoD                                                                        ; PAD = OO, NC, NC
-    (immlo 0x8)
+    (immlo #x8)
     or                                                                          ; PAD = OO,TNC, NC
     togglehs
     rplaca          ; store new ptr with broken heart type into old HS
