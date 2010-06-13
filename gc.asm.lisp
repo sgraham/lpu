@@ -45,6 +45,7 @@
     ; SCAN == car of GC0. When SCAN catches up with HEAP we've walked the
     ; whole queue.
     (imm GC0)
+    AtoP
     car
     AtoD
     freecells       ; HEAPtoA
