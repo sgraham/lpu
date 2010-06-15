@@ -191,8 +191,13 @@
 
 (defun dec-pc ()
  (let* ((pc (bits-to-integer (getPC #xD #x0)))
-        (incd (1- pc)))
-  (setPC #xD #x0 (integer-to-bits incd 14))))
+        (decd (1- pc)))
+  (setPC #xD #x0 (integer-to-bits decd 14))))
+
+(defun dec-heap ()
+ (let* ((heap (bits-to-integer (getHEAP #xB #x0)))
+        (decd (1- heap)))
+  (setHEAP #xB #x0 (integer-to-bits decd 12))))
 
 (defun disasm-near-pc ()
   (format t "PC:0x~x~tA:0x~x~tD:0x~x~tP:0x~x~t~%"
@@ -271,8 +276,20 @@
 (op #b00000010 'cdr
   (setD #x7 #x0 (readram 2))
   (setD #xF #x8 (readram 3)))
-;(op #b00000011 unassigned)
-(op #b00000100 'cons)
+(op #b00000011 'cons
+  (if (every #'zerop (getHEAP #xB #x0))
+    (progn
+      (error "out of memory, need to finish and assemble GC routine now")
+      (writeram-const *RES1* 2 (getPC #x7 #x0))
+      (writeram-const *RES1* 3 (concatenate 'vector #*00 (getPC #xD #x8)))
+      (setPC #x7 #x0 (readram-const *RES1* 0))
+      (setPC #xD #x8 (subseq (readram-const *RES1* 1) 2 8)))
+    (progn
+      (dec-heap)
+      (writeram-const (getHEAP #xB #x0) 0 #*00000000)
+      (writeram-const (getHEAP #xB #x0) 1 #*01000000) ; nil ptr
+      (writeram-const (getHEAP #xB #x0) 2 (getP #x7 #x0))
+      (writeram-const (getHEAP #xB #x0) 3 (getP #xF #x8)))))
 (op #b00000101 'rplaca
   (writeram 0 (getA #x7 #x0))
   (writeram 1 (getA #xF #x8)))
