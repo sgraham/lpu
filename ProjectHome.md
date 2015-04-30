@@ -1,0 +1,1 @@
+A simulator for a processor that's based on hierarchical evaluation of expression trees, rather than the conventional ALU + linear instruction stream.
